@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Racing Sim Radio</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400;600;700;900&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #080809;
+  --surface: #0f0f12;
+  --surface2: #141418;
+  --border: #1c1c22;
+  --border2: #252530;
+  --accent: #e8181b;
+  --accent2: #ff4d1c;
+  --text: #dddde8;
+  --muted: #44444f;
+  --muted2: #666675;
+  --green: #00e676;
+}
+
+html, body {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Barlow', sans-serif;
+  overflow-x: hidden;
+}
+
+/* ---- GRID BACKGROUND ---- */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    repeating-linear-gradient(0deg, transparent, transparent 59px, rgba(255,255,255,0.018) 60px),
+    repeating-linear-gradient(90deg, transparent, transparent 59px, rgba(255,255,255,0.018) 60px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ---- SCAN LINE EFFECT ---- */
+body::after {
+  content: '';
+  position: fixed;
+  top: -100%;
+  left: 0;
+  right: 0;
+  height: 40%;
+  background: linear-gradient(transparent, rgba(232,24,27,0.03), transparent);
+  animation: scan 8s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+@keyframes scan { 0%{top:-40%} 100%{top:100%} }
+
+/* ---- LAYOUT ---- */
+.page {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- TOPBAR ---- */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 48px;
+  height: 56px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(8,8,9,0.8);
+  backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.topbar-logo {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 900;
+  font-size: 14px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.85)} }
+
+.topbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.nav-btn {
+  padding: 7px 16px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted2);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nav-btn:hover {
+  color: var(--text);
+  border-color: var(--border2);
+}
+
+.nav-btn.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.nav-btn.primary:hover {
+  background: var(--accent);
+  color: white;
+}
+
+/* ---- HERO ---- */
+.hero {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 48px 60px;
+  text-align: center;
+  position: relative;
+}
+
+/* Red glow behind hero */
+.hero::before {
+  content: '';
+  position: absolute;
+  top: 20%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 600px;
+  height: 300px;
+  background: radial-gradient(ellipse, rgba(232,24,27,0.08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.hero-eyebrow {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 28px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  animation: fadeUp 0.6s ease both;
+}
+
+.hero-eyebrow::before, .hero-eyebrow::after {
+  content: '';
+  display: block;
+  width: 32px;
+  height: 1px;
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.hero-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 900;
+  font-size: clamp(64px, 10vw, 120px);
+  line-height: 0.88;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  margin-bottom: 32px;
+  animation: fadeUp 0.6s ease 0.1s both;
+}
+
+.hero-title .line-2 {
+  color: var(--accent);
+  display: block;
+}
+
+.hero-title .line-3 {
+  font-weight: 300;
+  color: var(--muted2);
+  font-size: 0.55em;
+  letter-spacing: 0.15em;
+  display: block;
+  margin-top: 8px;
+}
+
+.hero-subtitle {
+  font-size: 16px;
+  color: var(--muted2);
+  max-width: 520px;
+  line-height: 1.6;
+  font-weight: 300;
+  margin-bottom: 56px;
+  animation: fadeUp 0.6s ease 0.2s both;
+}
+
+/* ---- CTA BUTTONS ---- */
+.cta-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  animation: fadeUp 0.6s ease 0.3s both;
+}
+
+.cta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 32px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  text-decoration: none;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+  position: relative;
+  overflow: hidden;
+}
+
+.cta-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.08) 0%, transparent 60%);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.cta-btn:hover::before { opacity: 1; }
+
+.cta-btn.controller {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 0 0 1px var(--accent), 0 8px 32px rgba(232,24,27,0.25);
+}
+
+.cta-btn.controller:hover {
+  background: #ff2528;
+  box-shadow: 0 0 0 1px #ff2528, 0 12px 40px rgba(232,24,27,0.4);
+  transform: translateY(-1px);
+}
+
+.cta-btn.driver {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border2);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+}
+
+.cta-btn.driver:hover {
+  border-color: var(--text);
+  background: rgba(255,255,255,0.04);
+  transform: translateY(-1px);
+}
+
+.btn-icon {
+  width: 18px;
+  height: 18px;
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
+/* ---- DIVIDER ---- */
+.divider {
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border2), var(--border2), transparent);
+  margin: 0 auto;
+}
+
+/* ---- INFO SECTION ---- */
+.info-section {
+  padding: 72px 48px 80px;
+  max-width: 1100px;
+  margin: 0 auto;
+  width: 100%;
+  animation: fadeUp 0.6s ease 0.4s both;
+}
+
+.info-label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 32px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.info-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 48px;
+  align-items: start;
+}
+
+.info-desc {
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--muted2);
+  font-weight: 300;
+}
+
+.info-desc strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.info-desc p + p {
+  margin-top: 16px;
+}
+
+.feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.feature-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.feature-item:first-child {
+  border-top: 1px solid var(--border);
+}
+
+.feature-num {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 900;
+  font-size: 11px;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  min-width: 24px;
+  padding-top: 2px;
+}
+
+.feature-text {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.feature-text span {
+  display: block;
+  font-weight: 300;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--muted2);
+  text-transform: none;
+  margin-top: 3px;
+  font-family: 'Barlow', sans-serif;
+}
+
+/* ---- FOOTER ---- */
+.footer {
+  border-top: 1px solid var(--border);
+  padding: 20px 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.footer-text {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.footer-links {
+  display: flex;
+  gap: 20px;
+}
+
+.footer-link {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.footer-link:hover { color: var(--text); }
+
+/* ---- ANIMATIONS ---- */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- RESPONSIVE ---- */
+@media (max-width: 768px) {
+  .topbar { padding: 0 24px; }
+  .hero { padding: 60px 24px 48px; }
+  .cta-row { flex-direction: column; width: 100%; }
+  .cta-btn { width: 100%; justify-content: center; }
+  .info-section { padding: 48px 24px 64px; }
+  .info-grid { grid-template-columns: 1fr; gap: 40px; }
+  .footer { padding: 20px 24px; flex-direction: column; gap: 12px; text-align: center; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="topbar-logo">
+      <div class="logo-dot"></div>
+      Racing Sim Radio
+    </div>
+    <nav class="topbar-nav">
+      <a href="/control.html" class="nav-btn primary">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        Controller
+      </a>
+      <a href="/driver.html" class="nav-btn">
+        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/></svg>
+        Driver
+      </a>
+    </nav>
+  </header>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="hero-eyebrow">Live Broadcast System</div>
+    <h1 class="hero-title">
+      Racing Sim
+      <span class="line-2">Radio</span>
+      <span class="line-3">F1-Style Driver Radio Replays for Sim Racing</span>
+    </h1>
+    <p class="hero-subtitle">
+      Replicate the iconic radio replay system used in Formula 1 — live in your sim racing broadcast.
+      Built natively for OBS, real-time across all drivers, zero latency.
+    </p>
+    <div class="cta-row">
+      <a href="/control.html" class="cta-btn controller">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        Open Controller
+      </a>
+      <a href="/driver.html" class="cta-btn driver">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/></svg>
+        Driver Connect
+      </a>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- INFO -->
+  <section class="info-section">
+    <div class="info-label">About</div>
+    <div class="info-grid">
+      <div class="info-desc">
+        <p>
+          <strong>Racing Sim Radio</strong> is a live broadcast tool designed to bring the iconic F1 team radio replay experience to sim racing streams. When a driver says something worth airing, your broadcast operator captures the moment, trims it, and fires it to your OBS stream — complete with the F1-style animated overlay and radio chirp.
+        </p>
+        <p>
+          Drivers connect from any device using their microphone. The controller monitors all feeds in real time, freezes the waveform when a clip is worth using, trims to the exact moment, previews it privately, then fires it to the stream. The overlay animates in with the driver's name, the audio plays, and it disappears cleanly once finished.
+        </p>
+        <p>
+          Built on WebRTC — <strong>no servers, no installs, no accounts</strong>. Works in any modern browser. Designed to run alongside OBS with a transparent browser source overlay at 1280×720.
+        </p>
+      </div>
+      <div class="feature-list">
+        <div class="feature-item">
+          <div class="feature-num">01</div>
+          <div class="feature-text">Real-Time Audio Monitoring
+            <span>Live waveform display per driver with rolling 60s buffer</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-num">02</div>
+          <div class="feature-text">Freeze &amp; Trim
+            <span>Freeze the waveform, drag crop handles to select the exact clip</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-num">03</div>
+          <div class="feature-text">F1-Style OBS Overlay
+            <span>Animated lower-third with driver name, radio chirp, and auto-hide</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-num">04</div>
+          <div class="feature-text">Text Overlays
+            <span>Fire custom typed messages to stream without audio</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-num">05</div>
+          <div class="feature-text">Live Driver Roster
+            <span>Drivers see live name list — taken slots greyed out automatically</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-num">06</div>
+          <div class="feature-text">Zero Setup
+            <span>No installs, no accounts, no servers — runs entirely in browser</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="footer">
+    <div class="footer-text">Racing Sim Radio — F1-Style Broadcast Tools</div>
+    <div class="footer-links">
+      <a href="/control.html" class="footer-link">Controller</a>
+      <a href="/driver.html" class="footer-link">Driver</a>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>
