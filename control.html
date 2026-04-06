@@ -830,38 +830,62 @@ function attachStream(peerId, stream) {
   if (!d) return;
 
   if (d.audioCtx) { try { d.audioCtx.close(); } catch(e){} }
+  if (d.pollInterval) clearInterval(d.pollInterval);
 
   d.audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
   const source = d.audioCtx.createMediaStreamSource(stream);
 
+  // Analyser for waveform display
   d.analyser = d.audioCtx.createAnalyser();
-  d.analyser.fftSize = 128;
+  d.analyser.fftSize = 256;
   source.connect(d.analyser);
 
-  // Rolling buffer using ScriptProcessor
-  const bufferSize = 4096;
-  const processor = d.audioCtx.createScriptProcessor(bufferSize, 1, 1);
-  processor.onaudioprocess = (e) => {
-    const input = e.inputBuffer.getChannelData(0);
-    const copy = new Float32Array(input.length);
-    copy.set(input);
-    d.buffer.push(copy);
-    d.bufferDuration += bufferSize / SAMPLE_RATE;
+  // MediaRecorder for rolling buffer — much more reliable than ScriptProcessor
+  const dest = d.audioCtx.createMediaStreamDestination();
+  source.connect(dest);
 
-    // Trim to BUFFER_SECONDS
-    while (d.bufferDuration > BUFFER_SECONDS && d.buffer.length > 1) {
-      const removed = d.buffer.shift();
-      d.bufferDuration -= removed.length / SAMPLE_RATE;
+  let mediaRecorder;
+  try {
+    mediaRecorder = new MediaRecorder(dest.stream, { mimeType: 'audio/webm;codecs=opus' });
+  } catch(e) {
+    mediaRecorder = new MediaRecorder(dest.stream);
+  }
+
+  d.mediaRecorder = mediaRecorder;
+  d.chunks = [];
+  d.chunkTimestamps = [];
+  d.bufferDuration = 0;
+
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      d.chunks.push(e.data);
+      d.chunkTimestamps.push(Date.now());
+      d.bufferDuration = Math.min(d.bufferDuration + 1, BUFFER_SECONDS);
+
+      // Keep only last BUFFER_SECONDS worth
+      while (d.chunks.length > BUFFER_SECONDS) {
+        d.chunks.shift();
+        d.chunkTimestamps.shift();
+      }
+
+      // Enable fire button once we have audio
+      const fireBtn = d.cardEl && d.cardEl.querySelector('[data-fire-btn]');
+      if (fireBtn && d.connected) fireBtn.disabled = false;
     }
-
-    // Update waveform display data
-    const rms = Math.sqrt(input.reduce((a,b) => a + b*b, 0) / input.length);
-    d.waveformData.push(rms);
-    if (d.waveformData.length > 200) d.waveformData.shift();
   };
 
-  source.connect(processor);
-  processor.connect(d.audioCtx.destination);
+  mediaRecorder.start(1000); // 1 second chunks
+
+  // Poll analyser for waveform data
+  d.pollInterval = setInterval(() => {
+    if (!d.analyser) return;
+    const data = new Uint8Array(d.analyser.frequencyBinCount);
+    d.analyser.getByteFrequencyData(data);
+    const avg = data.reduce((a, b) => a + b, 0) / data.length / 255;
+    d.waveformData.push(avg);
+    if (d.waveformData.length > 200) d.waveformData.shift();
+    d.bufferDuration = Math.min(d.chunks.length, BUFFER_SECONDS);
+  }, 100);
 
   d.connected = true;
   updateCard(peerId);
@@ -1047,42 +1071,37 @@ function startWaveformDraw(peerId) {
   draw();
 }
 
-// ---- FIRE CLIP ----
 async function fireClip(peerId) {
   const d = drivers[peerId];
-  if (!d || !d.connected || d.buffer.length === 0) return;
+  if (!d || !d.connected || !d.chunks || d.chunks.length === 0) return;
 
   const btn = d.cardEl.querySelector('[data-fire-btn]');
   btn.classList.add('firing');
   btn.textContent = '⬤ SENDING...';
 
-  // Extract cropped audio from buffer
-  const totalSamples = d.buffer.reduce((a, b) => a + b.length, 0);
-  const startSample = Math.floor(d.cropStart * totalSamples);
-  const endSample = Math.floor(d.cropEnd * totalSamples);
-  const clipLength = endSample - startSample;
+  // Crop chunks based on handles
+  const totalChunks = d.chunks.length;
+  const startIdx = Math.floor(d.cropStart * totalChunks);
+  const endIdx = Math.max(startIdx + 1, Math.floor(d.cropEnd * totalChunks));
+  const selectedChunks = d.chunks.slice(startIdx, endIdx);
+  const clipDuration = selectedChunks.length; // ~1 second per chunk
 
-  if (clipLength <= 0) {
+  if (selectedChunks.length === 0) {
     btn.classList.remove('firing');
     btn.textContent = '⬤ FIRE RADIO CLIP';
     return;
   }
 
-  // Merge buffer chunks into one array
-  const merged = new Float32Array(totalSamples);
-  let offset = 0;
-  for (const chunk of d.buffer) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
+  // Combine chunks into a single blob
+  const blob = new Blob(selectedChunks, { type: d.mediaRecorder.mimeType || 'audio/webm' });
 
-  const clip = merged.slice(startSample, endSample);
+  // Convert to base64
+  const base64 = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result.split(',')[1]);
+    reader.readAsDataURL(blob);
+  });
 
-  // Encode to WAV
-  const wavBuffer = encodeWAV(clip, SAMPLE_RATE);
-  const base64 = arrayBufferToBase64(wavBuffer);
-
-  // Get overlay settings
   const settings = getSettings();
 
   const payload = {
@@ -1093,15 +1112,14 @@ async function fireClip(peerId) {
     textColor: settings.textColor,
     position: settings.position,
     audio: base64,
-    duration: clipLength / SAMPLE_RATE,
+    mimeType: d.mediaRecorder.mimeType || 'audio/webm',
+    duration: clipDuration,
   };
 
-  // Send to OBS via peer data connection
   if (obsConnection && obsConnection.open) {
     obsConnection.send(JSON.stringify(payload));
-    log('FIRED: ' + d.name + ' (' + (clipLength/SAMPLE_RATE).toFixed(1) + 's)', 'fire');
+    log('FIRED: ' + d.name + ' (' + clipDuration.toFixed(1) + 's)', 'fire');
   } else {
-    // Try to reconnect OBS
     log('OBS not connected — attempting...', 'disconnect');
     tryConnectOBS(payload);
   }
@@ -1111,7 +1129,6 @@ async function fireClip(peerId) {
     btn.textContent = '⬤ FIRE RADIO CLIP';
   }, 300);
 
-  // Flash card border
   d.cardEl.classList.add('recording');
   setTimeout(() => d.cardEl.classList.remove('recording'), 300);
 }
