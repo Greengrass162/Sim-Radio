@@ -399,35 +399,39 @@ function handleFire(payload) {
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       const mimeType = payload.mimeType || 'audio/webm';
       const blob = new Blob([bytes], { type: mimeType });
-      const url = URL.createObjectURL(blob);
 
-      currentAudio = new Audio(url);
-      currentAudio.play().catch(e => {
-        // Autoplay blocked — common in browsers, needs user interaction first
-        // OBS browser source usually allows this
-        console.warn('Audio autoplay blocked:', e);
-      });
-
-      // Use actual audio duration once loaded
-      currentAudio.addEventListener('loadedmetadata', () => {
-        clipDuration = currentAudio.duration;
-        scheduleHide(overlay, pos, isRight, clipDuration);
-      });
-
-      currentAudio.addEventListener('ended', () => {
-        URL.revokeObjectURL(url);
+      blob.arrayBuffer().then(buf => {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        ctx.resume();
+        ctx.decodeAudioData(buf.slice(0), (decoded) => {
+          clipDuration = decoded.duration;
+          const src = ctx.createBufferSource();
+          src.buffer = decoded;
+          src.connect(ctx.destination);
+          src.start(0);
+          src.onended = () => ctx.close();
+          scheduleHide(overlay, pos, isRight, clipDuration);
+        }, (err) => {
+          console.warn('OBS audio decode failed, trying Audio element:', err);
+          // Fallback to Audio element
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.play().catch(e => console.warn('Audio play failed:', e));
+          audio.onloadedmetadata = () => scheduleHide(overlay, pos, isRight, audio.duration);
+          audio.onended = () => URL.revokeObjectURL(url);
+        });
       });
     } catch(e) {
-      console.error('Audio decode error:', e);
+      console.error('Audio error:', e);
     }
   }
 
   // Show overlay with animation
-  void overlay.offsetWidth; // force reflow
+  void overlay.offsetWidth;
   overlay.classList.add(isRight ? 'show-right' : 'show-left');
 
-  // Schedule hide after clip duration
-  scheduleHide(overlay, pos, isRight, clipDuration);
+  // Fallback hide if audio fails to load within 2s
+  if (!audio) scheduleHide(overlay, pos, isRight, clipDuration);
 }
 
 function scheduleHide(overlay, pos, isRight, duration) {
