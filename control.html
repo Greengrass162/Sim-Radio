@@ -1,0 +1,1288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Radio Control Panel</title>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400;600;700;900&family=Barlow:wght@300;400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #080809;
+  --surface: #0f0f12;
+  --surface2: #141418;
+  --border: #1c1c22;
+  --border2: #252530;
+  --accent: #e8181b;
+  --accent2: #ff6b35;
+  --text: #dddde8;
+  --muted: #44444f;
+  --muted2: #666675;
+  --green: #00e676;
+  --yellow: #ffd600;
+  --blue: #448aff;
+  --waveform: #2a2a35;
+  --waveform-active: #e8181b;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Barlow', sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* TOP BAR */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  height: 52px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.brand {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 900;
+  font-size: 16px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+
+.panel-status {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  color: var(--muted2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.live-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.live-dot.on {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: blink 1.5s infinite;
+}
+
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.panel-id-box {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: var(--muted2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+}
+
+.conn-count {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 20px;
+  color: var(--green);
+  letter-spacing: 0.05em;
+}
+
+.conn-label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+/* LAYOUT */
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  height: calc(100vh - 52px);
+}
+
+/* DRIVERS GRID */
+.drivers-area {
+  overflow-y: auto;
+  padding: 20px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
+}
+
+.section-label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.drivers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 10px;
+}
+
+/* DRIVER CARD */
+.driver-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 14px;
+  position: relative;
+  transition: border-color 0.2s;
+}
+
+.driver-card.connected { border-color: var(--border2); }
+.driver-card.recording { border-color: var(--accent); }
+
+.driver-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.driver-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.driver-num {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 900;
+  font-size: 22px;
+  color: var(--muted);
+  min-width: 32px;
+  line-height: 1;
+}
+
+.driver-card.connected .driver-num { color: var(--text); }
+
+.driver-name {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted2);
+}
+
+.driver-card.connected .driver-name { color: var(--text); }
+
+.driver-badge {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border: 1px solid var(--muted);
+  color: var(--muted);
+}
+
+.driver-badge.online {
+  border-color: var(--green);
+  color: var(--green);
+  background: rgba(0,230,118,0.06);
+}
+
+.driver-badge.recording-badge {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(232,24,27,0.1);
+  animation: blink 0.5s infinite;
+}
+
+/* WAVEFORM */
+.waveform-wrap {
+  position: relative;
+  height: 52px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  margin-bottom: 10px;
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+canvas.waveform {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* CROP HANDLES */
+.crop-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.crop-mask-left {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  background: rgba(0,0,0,0.6);
+  pointer-events: none;
+}
+
+.crop-mask-right {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6);
+  pointer-events: none;
+}
+
+.crop-handle {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 3px;
+  background: var(--yellow);
+  cursor: ew-resize;
+  pointer-events: all;
+  z-index: 10;
+}
+
+.crop-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  width: 9px; height: 18px;
+  background: var(--yellow);
+  border-radius: 2px;
+}
+
+.crop-region {
+  position: absolute;
+  top: 0; bottom: 0;
+  border-top: 1px solid var(--yellow);
+  border-bottom: 1px solid var(--yellow);
+  background: rgba(255,214,0,0.06);
+  pointer-events: none;
+}
+
+/* TIME DISPLAY */
+.crop-times {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: var(--muted2);
+}
+
+.crop-times span { color: var(--yellow); }
+
+/* BUFFER INFO */
+.buffer-info {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+/* FIRE BUTTON */
+.fire-btn {
+  width: 100%;
+  padding: 10px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.fire-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 0 20px rgba(232,24,27,0.3);
+}
+
+.fire-btn:disabled {
+  border-color: var(--muted);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.fire-btn.firing {
+  background: var(--accent);
+  color: white;
+  animation: fireFlash 0.2s ease-out;
+}
+
+@keyframes fireFlash {
+  0% { box-shadow: 0 0 30px rgba(232,24,27,0.8); }
+  100% { box-shadow: none; }
+}
+
+/* SIDEBAR */
+.sidebar {
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-section {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+/* OVERLAY SETTINGS */
+.field-group {
+  margin-bottom: 14px;
+}
+
+.field-label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  color: var(--muted2);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  display: block;
+}
+
+.field-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 9px 12px;
+  font-family: 'Barlow', sans-serif;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.field-input:focus { border-color: var(--accent); }
+
+.color-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* PREVIEW */
+.preview-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: repeating-linear-gradient(45deg, #0a0a0c 0, #0a0a0c 10px, #0c0c0f 10px, #0c0c0f 20px);
+}
+
+.preview-label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  align-self: flex-start;
+}
+
+/* F1 OVERLAY PREVIEW */
+.f1-preview {
+  width: 100%;
+}
+
+.f1-overlay {
+  display: flex;
+  align-items: stretch;
+  height: 52px;
+  opacity: 0.9;
+}
+
+.f1-accent-bar {
+  width: 6px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.f1-body {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 14px;
+  min-width: 180px;
+}
+
+.f1-car-label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.5);
+  line-height: 1;
+  margin-bottom: 3px;
+}
+
+.f1-driver-label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 900;
+  font-size: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  color: white;
+}
+
+.f1-radio-icon {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 6px;
+  border-left: 1px solid rgba(255,255,255,0.1);
+}
+
+.radio-waves {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: center;
+}
+
+.radio-wave {
+  height: 2px;
+  background: white;
+  border-radius: 1px;
+  opacity: 0.6;
+}
+
+.obs-link-box {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  padding: 10px 12px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: var(--blue);
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+
+.copy-btn {
+  width: 100%;
+  padding: 9px;
+  background: var(--border2);
+  border: none;
+  color: var(--text);
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.copy-btn:hover { background: var(--border); }
+
+/* LOG */
+.log-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 20px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
+}
+
+.log-entry {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: var(--muted2);
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+
+.log-entry .log-time { color: var(--muted); margin-right: 8px; }
+.log-entry.fire { color: var(--accent); }
+.log-entry.connect { color: var(--green); }
+.log-entry.disconnect { color: var(--yellow); }
+
+/* BUFFER RECORDING BARS */
+.rec-bar {
+  height: 2px;
+  background: var(--border);
+  margin-bottom: 6px;
+  position: relative;
+  overflow: hidden;
+}
+
+.rec-bar-fill {
+  position: absolute;
+  top: 0; left: 0;
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  transition: width 0.1s;
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="brand">
+      <div class="brand-dot"></div>
+      Radio Control Panel
+    </div>
+    <div class="panel-status">
+      <div class="live-dot" id="panelLiveDot"></div>
+      <span id="panelStatusText">Initializing...</span>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div>
+      <div class="conn-count" id="connCount">0</div>
+      <div class="conn-label">Connected</div>
+    </div>
+    <div class="panel-id-box" id="panelIdBox">Panel ID: loading...</div>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- DRIVERS GRID -->
+  <div class="drivers-area">
+    <div class="section-label">Live Driver Feeds</div>
+    <div class="drivers-grid" id="driversGrid">
+      <!-- Cards injected by JS -->
+    </div>
+  </div>
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">Overlay Settings</div>
+      <div class="field-group">
+        <label class="field-label">Team / Car Type</label>
+        <input type="text" class="field-input" id="settingCarType" placeholder="e.g. Ferrari, McLaren..." value="TEAM RADIO">
+      </div>
+      <div class="color-row">
+        <div class="field-group">
+          <label class="field-label">Accent Color</label>
+          <input type="color" class="field-input" id="settingColor" value="#e8181b" style="height:38px;padding:4px 8px;cursor:pointer;">
+        </div>
+        <div class="field-group">
+          <label class="field-label">Text Color</label>
+          <input type="color" class="field-input" id="settingTextColor" value="#ffffff" style="height:38px;padding:4px 8px;cursor:pointer;">
+        </div>
+      </div>
+      <div class="field-group">
+        <label class="field-label">Overlay Position</label>
+        <select class="field-input" id="settingPosition" style="appearance:none;cursor:pointer;">
+          <option value="bottom-left">Bottom Left (F1 Style)</option>
+          <option value="bottom-right">Bottom Right</option>
+          <option value="top-left">Top Left</option>
+          <option value="top-right">Top Right</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">Driver Roster</div>
+
+      <div id="rosterList" style="margin-bottom:12px;display:flex;flex-direction:column;gap:6px;max-height:180px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;"></div>
+
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <input type="text" class="field-input" id="newDriverInput" placeholder="Driver name..." style="margin:0;flex:1;" onkeydown="if(event.key==='Enter')addDriver()">
+        <button onclick="addDriver()" style="padding:9px 14px;background:var(--accent);border:none;color:white;font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:13px;letter-spacing:0.1em;cursor:pointer;flex-shrink:0;">ADD</button>
+      </div>
+
+      <button class="copy-btn" onclick="generateLink()" style="margin-bottom:6px;background:var(--accent);color:white;">Generate Driver Link</button>
+
+      <div id="generatedLinkBox" style="display:none;">
+        <div style="font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--blue);background:var(--bg);border:1px solid var(--border);padding:8px 10px;word-break:break-all;margin-bottom:6px;max-height:60px;overflow-y:auto;" id="generatedLinkText"></div>
+        <button class="copy-btn" onclick="copyGeneratedLink()">Copy Link</button>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">OBS Browser Source</div>
+      <div class="obs-link-box" id="obsLinkBox">obs.html — open this file in OBS browser source (local file)</div>
+      <button class="copy-btn" onclick="copyOBSInstructions()">Copy Setup Instructions</button>
+    </div>
+
+    <div class="sidebar-section" style="flex:0 0 auto;">
+      <div class="sidebar-title">Overlay Preview</div>
+      <div class="preview-area" style="padding:16px;background:rgba(0,0,0,0.3);">
+        <div class="f1-overlay" id="previewOverlay">
+          <div class="f1-accent-bar" id="previewAccentBar"></div>
+          <div class="f1-body" id="previewBody" style="background:rgba(20,20,25,0.95)">
+            <div class="f1-car-label" id="previewCarLabel">TEAM RADIO</div>
+            <div class="f1-driver-label" id="previewDriverLabel">DRIVER NAME</div>
+          </div>
+          <div class="f1-radio-icon" style="background:rgba(20,20,25,0.95)">
+            <div class="radio-waves">
+              <div class="radio-wave" style="width:16px"></div>
+              <div class="radio-wave" style="width:12px"></div>
+              <div class="radio-wave" style="width:8px"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-section" style="flex:1;overflow:hidden;display:flex;flex-direction:column;">
+      <div class="sidebar-title">Event Log</div>
+      <div class="log-area" id="logArea"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const PANEL_ID = 'simradio_control_panel_v1';
+const BUFFER_SECONDS = 60;
+const SAMPLE_RATE = 44100;
+
+let peer;
+let drivers = {}; // peerId -> driver data
+let obsConnection = null;
+let connectedCount = 0;
+
+// ---- PEER SETUP ----
+function initPanel() {
+  log('Initializing panel...', 'info');
+  peer = new Peer(PANEL_ID, { debug: 0 });
+
+  peer.on('open', (id) => {
+    document.getElementById('panelIdBox').textContent = 'Panel ID: ' + id;
+    document.getElementById('panelLiveDot').classList.add('on');
+    document.getElementById('panelStatusText').textContent = 'Panel online — waiting for drivers';
+    log('Panel online: ' + id, 'connect');
+  });
+
+  peer.on('call', (call) => {
+    const meta = call.metadata || {};
+    const driverName = meta.driverName || 'Unknown Driver';
+    const peerId = call.peer;
+
+    log('Incoming: ' + driverName, 'connect');
+    call.answer(); // answer with no stream back needed
+
+    call.on('stream', (stream) => {
+      if (drivers[peerId]) {
+        // Reconnect — update stream
+        drivers[peerId].stream = stream;
+        drivers[peerId].name = driverName;
+        attachStream(peerId, stream);
+        updateCard(peerId);
+      } else {
+        registerDriver(peerId, driverName, stream);
+      }
+    });
+
+    call.on('close', () => {
+      if (drivers[peerId]) {
+        drivers[peerId].connected = false;
+        updateCard(peerId);
+        connectedCount = Math.max(0, connectedCount - 1);
+        updateConnCount();
+        log('Disconnected: ' + driverName, 'disconnect');
+      }
+    });
+
+    call.on('error', () => {
+      if (drivers[peerId]) {
+        drivers[peerId].connected = false;
+        updateCard(peerId);
+      }
+    });
+  });
+
+  peer.on('connection', (conn) => {
+    // OBS page data connection
+    conn.on('open', () => {
+      obsConnection = conn;
+      log('OBS output connected', 'connect');
+    });
+    conn.on('close', () => {
+      obsConnection = null;
+    });
+  });
+
+  peer.on('error', (err) => {
+    if (err.type === 'unavailable-id') {
+      log('Panel ID taken — another panel may be open', 'fire');
+    } else {
+      log('Peer error: ' + err.type, 'fire');
+    }
+  });
+}
+
+// ---- DRIVER MANAGEMENT ----
+function registerDriver(peerId, name, stream) {
+  drivers[peerId] = {
+    peerId,
+    name,
+    stream,
+    connected: true,
+    audioCtx: null,
+    analyser: null,
+    recorder: null,
+    chunks: [],
+    buffer: [], // rolling buffer of Float32Arrays
+    bufferDuration: 0,
+    cropStart: 0.1,
+    cropEnd: 0.9,
+    animFrame: null,
+    waveformData: [],
+    cardEl: null,
+  };
+
+  connectedCount++;
+  updateConnCount();
+
+  // Create or update card
+  const existingCard = document.querySelector(`[data-peer="${peerId}"]`);
+  if (existingCard) {
+    drivers[peerId].cardEl = existingCard;
+    updateCard(peerId);
+  } else {
+    createCard(peerId);
+  }
+
+  attachStream(peerId, stream);
+  log('Connected: ' + name, 'connect');
+}
+
+function attachStream(peerId, stream) {
+  const d = drivers[peerId];
+  if (!d) return;
+
+  if (d.audioCtx) { try { d.audioCtx.close(); } catch(e){} }
+
+  d.audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+  const source = d.audioCtx.createMediaStreamSource(stream);
+
+  d.analyser = d.audioCtx.createAnalyser();
+  d.analyser.fftSize = 128;
+  source.connect(d.analyser);
+
+  // Rolling buffer using ScriptProcessor
+  const bufferSize = 4096;
+  const processor = d.audioCtx.createScriptProcessor(bufferSize, 1, 1);
+  processor.onaudioprocess = (e) => {
+    const input = e.inputBuffer.getChannelData(0);
+    const copy = new Float32Array(input.length);
+    copy.set(input);
+    d.buffer.push(copy);
+    d.bufferDuration += bufferSize / SAMPLE_RATE;
+
+    // Trim to BUFFER_SECONDS
+    while (d.bufferDuration > BUFFER_SECONDS && d.buffer.length > 1) {
+      const removed = d.buffer.shift();
+      d.bufferDuration -= removed.length / SAMPLE_RATE;
+    }
+
+    // Update waveform display data
+    const rms = Math.sqrt(input.reduce((a,b) => a + b*b, 0) / input.length);
+    d.waveformData.push(rms);
+    if (d.waveformData.length > 200) d.waveformData.shift();
+  };
+
+  source.connect(processor);
+  processor.connect(d.audioCtx.destination);
+
+  d.connected = true;
+  updateCard(peerId);
+  startWaveformDraw(peerId);
+}
+
+// ---- CARD CREATION ----
+function createCard(peerId) {
+  const d = drivers[peerId];
+  const num = Object.keys(drivers).indexOf(peerId) + 1;
+
+  const card = document.createElement('div');
+  card.className = 'driver-card connected';
+  card.dataset.peer = peerId;
+  card.innerHTML = `
+    <div class="driver-card-top">
+      <div class="driver-info">
+        <div class="driver-num">#${num}</div>
+        <div class="driver-name">${d.name}</div>
+      </div>
+      <div class="driver-badge online" data-badge>LIVE</div>
+    </div>
+    <div class="waveform-wrap" data-waveform-wrap>
+      <canvas class="waveform" data-canvas width="400" height="52"></canvas>
+      <div class="crop-overlay">
+        <div class="crop-mask-left" data-mask-left style="width:10%"></div>
+        <div class="crop-mask-right" data-mask-right style="width:10%"></div>
+        <div class="crop-region" data-crop-region style="left:10%;right:10%"></div>
+        <div class="crop-handle" data-handle="start" style="left:10%"></div>
+        <div class="crop-handle" data-handle="end" style="right:10%"></div>
+      </div>
+    </div>
+    <div class="crop-times">
+      <div>▶ <span data-time-start>0.0s</span></div>
+      <div>Duration: <span data-time-dur>0.0s</span></div>
+      <div><span data-time-end>0.0s</span> ■</div>
+    </div>
+    <div class="buffer-info" data-buf-info>Buffer: 0.0s</div>
+    <button class="fire-btn" data-fire-btn onclick="fireClip('${peerId}')" disabled>
+      ⬤ FIRE RADIO CLIP
+    </button>
+  `;
+
+  document.getElementById('driversGrid').appendChild(card);
+  drivers[peerId].cardEl = card;
+
+  // Setup drag handles
+  setupCropHandles(peerId, card);
+}
+
+function updateCard(peerId) {
+  const d = drivers[peerId];
+  if (!d || !d.cardEl) return;
+  const card = d.cardEl;
+
+  card.classList.toggle('connected', d.connected);
+  const badge = card.querySelector('[data-badge]');
+  if (badge) {
+    badge.textContent = d.connected ? 'LIVE' : 'OFFLINE';
+    badge.className = 'driver-badge ' + (d.connected ? 'online' : '');
+  }
+
+  const nameEl = card.querySelector('.driver-name');
+  if (nameEl) nameEl.textContent = d.name;
+
+  const fireBtn = card.querySelector('[data-fire-btn]');
+  if (fireBtn) fireBtn.disabled = !d.connected || d.bufferDuration < 0.5;
+}
+
+// ---- CROP HANDLES ----
+function setupCropHandles(peerId, card) {
+  const d = drivers[peerId];
+  const wrap = card.querySelector('[data-waveform-wrap]');
+  const handleStart = card.querySelector('[data-handle="start"]');
+  const handleEnd = card.querySelector('[data-handle="end"]');
+
+  let dragging = null;
+
+  function onMove(e) {
+    if (!dragging) return;
+    const rect = wrap.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    let pct = (clientX - rect.left) / rect.width;
+    pct = Math.max(0, Math.min(1, pct));
+
+    if (dragging === 'start') {
+      d.cropStart = Math.min(pct, d.cropEnd - 0.05);
+    } else {
+      d.cropEnd = Math.max(pct, d.cropStart + 0.05);
+    }
+    updateCropUI(peerId, card);
+  }
+
+  function onUp() { dragging = null; }
+
+  handleStart.addEventListener('mousedown', (e) => { dragging = 'start'; e.preventDefault(); });
+  handleEnd.addEventListener('mousedown', (e) => { dragging = 'end'; e.preventDefault(); });
+  handleStart.addEventListener('touchstart', (e) => { dragging = 'start'; }, {passive:true});
+  handleEnd.addEventListener('touchstart', (e) => { dragging = 'end'; }, {passive:true});
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+  document.addEventListener('touchmove', onMove, {passive:true});
+  document.addEventListener('touchend', onUp);
+}
+
+function updateCropUI(peerId, card) {
+  const d = drivers[peerId];
+  const maskLeft = card.querySelector('[data-mask-left]');
+  const maskRight = card.querySelector('[data-mask-right]');
+  const region = card.querySelector('[data-crop-region]');
+  const handleStart = card.querySelector('[data-handle="start"]');
+  const handleEnd = card.querySelector('[data-handle="end"]');
+  const timeStart = card.querySelector('[data-time-start]');
+  const timeEnd = card.querySelector('[data-time-end]');
+  const timeDur = card.querySelector('[data-time-dur]');
+  const bufInfo = card.querySelector('[data-buf-info]');
+
+  const s = d.cropStart, e = d.cropEnd;
+  maskLeft.style.width = (s * 100) + '%';
+  maskRight.style.width = ((1 - e) * 100) + '%';
+  region.style.left = (s * 100) + '%';
+  region.style.right = ((1 - e) * 100) + '%';
+  handleStart.style.left = (s * 100) + '%';
+  handleEnd.style.left = (e * 100) + '%';
+
+  const buf = d.bufferDuration;
+  const tStart = s * buf;
+  const tEnd = e * buf;
+  timeStart.textContent = tStart.toFixed(1) + 's';
+  timeEnd.textContent = tEnd.toFixed(1) + 's';
+  timeDur.textContent = (tEnd - tStart).toFixed(1) + 's';
+  if (bufInfo) bufInfo.textContent = 'Buffer: ' + buf.toFixed(1) + 's (last ' + BUFFER_SECONDS + 's rolling)';
+}
+
+// ---- WAVEFORM DRAWING ----
+function startWaveformDraw(peerId) {
+  const d = drivers[peerId];
+  if (!d || !d.cardEl) return;
+  const canvas = d.cardEl.querySelector('[data-canvas]');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  function draw() {
+    if (!drivers[peerId]) return;
+    const W = canvas.offsetWidth * window.devicePixelRatio;
+    const H = canvas.offsetHeight * window.devicePixelRatio;
+    if (canvas.width !== W || canvas.height !== H) {
+      canvas.width = W; canvas.height = H;
+    }
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#080809';
+    ctx.fillRect(0, 0, W, H);
+
+    const data = d.waveformData;
+    const barW = W / Math.max(data.length, 1);
+    const s = d.cropStart, e = d.cropEnd;
+
+    for (let i = 0; i < data.length; i++) {
+      const x = i * barW;
+      const pct = i / data.length;
+      const inCrop = pct >= s && pct <= e;
+      const h = Math.max(2, data[i] * H * 8);
+
+      ctx.fillStyle = inCrop ? '#e8181b' : '#2a2a35';
+      ctx.fillRect(x, (H - h) / 2, barW - 1, h);
+    }
+
+    // Playhead line (right edge = now)
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(W - 1, 0);
+    ctx.lineTo(W - 1, H);
+    ctx.stroke();
+
+    updateCropUI(peerId, d.cardEl);
+    d.animFrame = requestAnimationFrame(draw);
+  }
+
+  if (d.animFrame) cancelAnimationFrame(d.animFrame);
+  draw();
+}
+
+// ---- FIRE CLIP ----
+async function fireClip(peerId) {
+  const d = drivers[peerId];
+  if (!d || !d.connected || d.buffer.length === 0) return;
+
+  const btn = d.cardEl.querySelector('[data-fire-btn]');
+  btn.classList.add('firing');
+  btn.textContent = '⬤ SENDING...';
+
+  // Extract cropped audio from buffer
+  const totalSamples = d.buffer.reduce((a, b) => a + b.length, 0);
+  const startSample = Math.floor(d.cropStart * totalSamples);
+  const endSample = Math.floor(d.cropEnd * totalSamples);
+  const clipLength = endSample - startSample;
+
+  if (clipLength <= 0) {
+    btn.classList.remove('firing');
+    btn.textContent = '⬤ FIRE RADIO CLIP';
+    return;
+  }
+
+  // Merge buffer chunks into one array
+  const merged = new Float32Array(totalSamples);
+  let offset = 0;
+  for (const chunk of d.buffer) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  const clip = merged.slice(startSample, endSample);
+
+  // Encode to WAV
+  const wavBuffer = encodeWAV(clip, SAMPLE_RATE);
+  const base64 = arrayBufferToBase64(wavBuffer);
+
+  // Get overlay settings
+  const settings = getSettings();
+
+  const payload = {
+    type: 'radio_fire',
+    driverName: d.name,
+    carType: settings.carType,
+    accentColor: settings.accentColor,
+    textColor: settings.textColor,
+    position: settings.position,
+    audio: base64,
+    duration: clipLength / SAMPLE_RATE,
+  };
+
+  // Send to OBS via peer data connection
+  if (obsConnection && obsConnection.open) {
+    obsConnection.send(JSON.stringify(payload));
+    log('FIRED: ' + d.name + ' (' + (clipLength/SAMPLE_RATE).toFixed(1) + 's)', 'fire');
+  } else {
+    // Try to reconnect OBS
+    log('OBS not connected — attempting...', 'disconnect');
+    tryConnectOBS(payload);
+  }
+
+  setTimeout(() => {
+    btn.classList.remove('firing');
+    btn.textContent = '⬤ FIRE RADIO CLIP';
+  }, 300);
+
+  // Flash card border
+  d.cardEl.classList.add('recording');
+  setTimeout(() => d.cardEl.classList.remove('recording'), 300);
+}
+
+function tryConnectOBS(payload) {
+  const OBS_PEER_ID = 'simradio_obs_output_v1';
+  const conn = peer.connect(OBS_PEER_ID, { reliable: true });
+  conn.on('open', () => {
+    obsConnection = conn;
+    conn.send(JSON.stringify(payload));
+    log('OBS reconnected + fired', 'connect');
+    conn.on('close', () => { obsConnection = null; });
+  });
+  conn.on('error', () => {
+    log('OBS page not open — open obs.html as browser source', 'fire');
+  });
+}
+
+// ---- SETTINGS ----
+function getSettings() {
+  return {
+    carType: document.getElementById('settingCarType').value || 'TEAM RADIO',
+    accentColor: document.getElementById('settingColor').value,
+    textColor: document.getElementById('settingTextColor').value,
+    position: document.getElementById('settingPosition').value,
+  };
+}
+
+// Live preview update
+document.getElementById('settingCarType').addEventListener('input', updatePreview);
+document.getElementById('settingColor').addEventListener('input', updatePreview);
+document.getElementById('settingTextColor').addEventListener('input', updatePreview);
+
+function updatePreview() {
+  const s = getSettings();
+  document.getElementById('previewAccentBar').style.background = s.accentColor;
+  document.getElementById('previewCarLabel').style.color = s.textColor + '80';
+  document.getElementById('previewDriverLabel').style.color = s.textColor;
+  document.getElementById('previewCarLabel').textContent = s.carType;
+}
+
+// ---- UTILS ----
+function updateConnCount() {
+  document.getElementById('connCount').textContent = connectedCount;
+}
+
+function log(msg, type) {
+  const area = document.getElementById('logArea');
+  const now = new Date();
+  const time = now.getHours().toString().padStart(2,'0') + ':' +
+               now.getMinutes().toString().padStart(2,'0') + ':' +
+               now.getSeconds().toString().padStart(2,'0');
+  const el = document.createElement('div');
+  el.className = 'log-entry ' + (type || '');
+  el.innerHTML = `<span class="log-time">${time}</span>${msg}`;
+  area.insertBefore(el, area.firstChild);
+  while (area.children.length > 80) area.removeChild(area.lastChild);
+}
+
+function copyOBSInstructions() {
+  const txt = `OBS Browser Source Setup:\n1. In OBS, add a Browser Source\n2. Check "Local file"\n3. Browse to obs.html (same folder as control.html)\n4. Width: 1920, Height: 1080\n5. Check "Shutdown source when not visible"\n6. Uncheck "Control audio via OBS"\n\nMake sure control.html is open first, then open obs.html`;
+  navigator.clipboard.writeText(txt).then(() => {
+    const btn = event.target;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy Setup Instructions', 1500);
+  });
+}
+
+// ---- WAV ENCODER ----
+function encodeWAV(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  function writeString(offset, str) {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  }
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    offset += 2;
+  }
+
+  return buffer;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+// ---- DRIVER ROSTER ----
+let rosterDrivers = [];
+
+function addDriver() {
+  const input = document.getElementById('newDriverInput');
+  const name = input.value.trim();
+  if (!name) return;
+  if (rosterDrivers.includes(name)) {
+    input.value = '';
+    return;
+  }
+  rosterDrivers.push(name);
+  input.value = '';
+  renderRoster();
+  log('Added to roster: ' + name, 'info');
+}
+
+function removeDriver(idx) {
+  rosterDrivers.splice(idx, 1);
+  renderRoster();
+}
+
+function renderRoster() {
+  const list = document.getElementById('rosterList');
+  if (rosterDrivers.length === 0) {
+    list.innerHTML = '<div style="font-family:\'Share Tech Mono\',monospace;font-size:10px;color:var(--muted);padding:4px 0;">No drivers added yet</div>';
+    return;
+  }
+  list.innerHTML = rosterDrivers.map((name, i) => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:var(--bg);border:1px solid var(--border);gap:8px;">
+      <span style="font-family:'Barlow Condensed',sans-serif;font-size:13px;font-weight:600;letter-spacing:0.05em;color:var(--text);">${name}</span>
+      <button onclick="removeDriver(${i})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:0 2px;" title="Remove">✕</button>
+    </div>
+  `).join('');
+}
+
+function generateLink() {
+  if (rosterDrivers.length === 0) {
+    alert('Add at least one driver first.');
+    return;
+  }
+  const encoded = rosterDrivers.map(d => encodeURIComponent(d)).join(',');
+  // Build URL relative to current page location
+  const base = window.location.href.replace('control.html', 'driver.html').split('?')[0];
+  const link = base + '?drivers=' + encoded;
+  document.getElementById('generatedLinkText').textContent = link;
+  document.getElementById('generatedLinkBox').style.display = 'block';
+  log('Link generated for ' + rosterDrivers.length + ' drivers', 'connect');
+}
+
+function copyGeneratedLink() {
+  const link = document.getElementById('generatedLinkText').textContent;
+  navigator.clipboard.writeText(link).then(() => {
+    const btn = event.target;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy Link', 1500);
+  });
+}
+
+// Init roster display
+renderRoster();
+
+
+
+// Connect to OBS on load
+setTimeout(() => {
+  const OBS_PEER_ID = 'simradio_obs_output_v1';
+  const conn = peer.connect(OBS_PEER_ID, { reliable: true });
+  if (conn) {
+    conn.on('open', () => {
+      obsConnection = conn;
+      log('OBS output linked', 'connect');
+      conn.on('close', () => { obsConnection = null; log('OBS disconnected', 'disconnect'); });
+    });
+  }
+}, 2000);
+</script>
+</body>
+</html>
