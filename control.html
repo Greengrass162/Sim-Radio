@@ -854,108 +854,99 @@ function attachStream(peerId, stream) {
 
   if (d.audioCtx) { try { d.audioCtx.close(); } catch(e){} }
   if (d.pollInterval) clearInterval(d.pollInterval);
-
-  d.audioCtx = new AudioContext();
-  // Resume context immediately — required on Mac Chrome
-  d.audioCtx.resume();
-
-  const source = d.audioCtx.createMediaStreamSource(stream);
-
-  // Analyser for waveform display
-  d.analyser = d.audioCtx.createAnalyser();
-  d.analyser.fftSize = 512;
-  d.analyser.smoothingTimeConstant = 0.8;
-  source.connect(d.analyser);
-
-  // MediaRecorder for rolling buffer
-  const dest = d.audioCtx.createMediaStreamDestination();
-  source.connect(dest);
-
-  let mediaRecorder;
-  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-    ? 'audio/webm;codecs=opus'
-    : MediaRecorder.isTypeSupported('audio/webm')
-    ? 'audio/webm'
-    : '';
-
-  try {
-    mediaRecorder = mimeType
-      ? new MediaRecorder(dest.stream, { mimeType })
-      : new MediaRecorder(dest.stream);
-  } catch(e) {
-    mediaRecorder = new MediaRecorder(dest.stream);
+  if (d.mediaRecorder && d.mediaRecorder.state !== 'inactive') {
+    try { d.mediaRecorder.stop(); } catch(e) {}
   }
 
-  d.mediaRecorder = mediaRecorder;
+  // Log stream details
+  const tracks = stream.getAudioTracks();
+  log('Stream: ' + tracks.length + ' track(s) — ' + (tracks[0] ? 'enabled:' + tracks[0].enabled + ' muted:' + tracks[0].muted : 'none'), 'connect');
+
   d.chunks = [];
+  d.allChunks = [];
   d.chunkTimestamps = [];
   d.bufferDuration = 0;
-  d.allChunks = []; // full stream including header
+  d.waveformData = [];
+
+  // Record directly from the raw WebRTC stream
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+
+  let mediaRecorder;
+  try {
+    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+  } catch(e) {
+    log('MediaRecorder failed: ' + e.message, 'fire');
+    return;
+  }
+
+  log('Recorder started — mime: ' + mediaRecorder.mimeType, 'connect');
+  d.mediaRecorder = mediaRecorder;
 
   mediaRecorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) {
-      // allChunks keeps everything including the header chunk (first chunk)
-      d.allChunks.push(e.data);
-      // Keep rolling window — but always keep chunk 0 (has stream header)
-      if (d.allChunks.length > BUFFER_SECONDS + 1) {
-        d.allChunks = [d.allChunks[0], ...d.allChunks.slice(-(BUFFER_SECONDS))];
-      }
-
-      d.chunks.push(e.data);
-      d.chunkTimestamps.push(Date.now());
-      while (d.chunks.length > BUFFER_SECONDS) {
-        d.chunks.shift();
-        d.chunkTimestamps.shift();
-      }
-
-      const fireBtn = d.cardEl && d.cardEl.querySelector('[data-fire-btn]');
-      const previewBtn = d.cardEl && d.cardEl.querySelector('[data-preview-btn]');
-      if (fireBtn && d.connected) fireBtn.disabled = false;
-      if (previewBtn && d.connected) previewBtn.disabled = false;
-
-      // Decode chunk for waveform using full blob with header
-      const fullBlob = new Blob(d.allChunks, { type: mediaRecorder.mimeType });
-      fullBlob.arrayBuffer().then(buf => {
-        d.audioCtx.decodeAudioData(buf).then(decoded => {
-          const channelData = decoded.getChannelData(0);
-          // Rebuild waveform data from full decoded audio
-          const totalDuration = decoded.duration;
-          const pointCount = 200;
-          const step = Math.floor(channelData.length / pointCount);
-          if (step < 1) return;
-          const newData = [];
-          for (let i = 0; i < pointCount; i++) {
-            const start = i * step;
-            const end = Math.min(start + step, channelData.length);
-            let sum = 0;
-            for (let j = start; j < end; j++) sum += channelData[j] * channelData[j];
-            newData.push(Math.max(Math.sqrt(sum / (end - start)), 0.002));
-          }
-          d.waveformData = newData;
-
-          const dbg = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]');
-          if (dbg) {
-            const peak = Math.max(...newData).toFixed(4);
-            dbg.textContent = `chunks:${d.chunks.length} dur:${totalDuration.toFixed(1)}s peak:${peak}`;
-          }
-        }).catch(err => {
-          const dbg = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]');
-          if (dbg) dbg.textContent = `decode err: ${err.message} chunks:${d.chunks.length}`;
-        });
-      });
+    const dbg = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]');
+    if (!e.data || e.data.size === 0) {
+      if (dbg) dbg.textContent = 'chunk empty — stream may have no audio';
+      return;
     }
+
+    d.allChunks.push(e.data);
+    if (d.allChunks.length > BUFFER_SECONDS + 1) {
+      d.allChunks = [d.allChunks[0], ...d.allChunks.slice(-BUFFER_SECONDS)];
+    }
+    d.chunks.push(e.data);
+    d.chunkTimestamps.push(Date.now());
+    while (d.chunks.length > BUFFER_SECONDS) { d.chunks.shift(); d.chunkTimestamps.shift(); }
+
+    const fireBtn = d.cardEl && d.cardEl.querySelector('[data-fire-btn]');
+    const previewBtn = d.cardEl && d.cardEl.querySelector('[data-preview-btn]');
+    if (fireBtn && d.connected) fireBtn.disabled = false;
+    if (previewBtn && d.connected) previewBtn.disabled = false;
+
+    if (dbg) dbg.textContent = `chunks:${d.chunks.length} size:${e.data.size}b — decoding...`;
+
+    // Decode for waveform
+    new Blob(d.allChunks, { type: mediaRecorder.mimeType }).arrayBuffer().then(buf => {
+      const ctx = new AudioContext();
+      ctx.decodeAudioData(buf).then(decoded => {
+        ctx.close();
+        const ch = decoded.getChannelData(0);
+        const pts = 200, step = Math.max(1, Math.floor(ch.length / pts));
+        const newData = [];
+        for (let i = 0; i < pts; i++) {
+          const s = i * step, end = Math.min(s + step, ch.length);
+          let sum = 0;
+          for (let j = s; j < end; j++) sum += ch[j] * ch[j];
+          newData.push(Math.max(Math.sqrt(sum / (end - s)), 0.003));
+        }
+        d.waveformData = newData;
+        if (dbg) dbg.textContent = `chunks:${d.chunks.length} dur:${decoded.duration.toFixed(1)}s peak:${Math.max(...newData).toFixed(4)}`;
+      }).catch(err => {
+        ctx.close();
+        if (dbg) dbg.textContent = `decode err: ${err.message}`;
+      });
+    });
   };
 
+  mediaRecorder.onerror = (e) => log('Recorder error: ' + e.error, 'fire');
   mediaRecorder.start(1000);
 
   d.pollInterval = setInterval(() => {
     d.bufferDuration = Math.min(d.chunks.length, BUFFER_SECONDS);
   }, 500);
 
+  // AudioContext for waveform analyser backup
+  try {
+    d.audioCtx = new AudioContext();
+    d.audioCtx.resume();
+  } catch(e) {}
+
   d.connected = true;
   updateCard(peerId);
   startWaveformDraw(peerId);
 }
+
 
 // ---- CARD CREATION ----
 function createCard(peerId) {
@@ -1427,6 +1418,6 @@ window.addEventListener('load', () => {
   }, 500);
 });
 </script>
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V4</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V5</div>
 </body>
 </html>
