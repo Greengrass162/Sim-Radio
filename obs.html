@@ -446,7 +446,15 @@ function scheduleHide(overlay, pos, isRight, duration) {
   }, (duration * 1000) + 200);
 }
 
-initOBS();
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    try {
+      initOBS();
+    } catch(e) {
+      console.error('OBS init error:', e);
+    }
+  }, 500);
+});
 </script>
 </body>
 </html>
