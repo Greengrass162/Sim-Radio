@@ -1281,9 +1281,16 @@ function copyGeneratedLink(btn) {
 // Init roster display
 renderRoster();
 
-
-
-
+// Defer init so mf.js injection doesn't crash our startup
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    try {
+      initPanel();
+    } catch(e) {
+      console.error('Panel init error:', e);
+    }
+  }, 500);
+});
 </script>
 </body>
 </html>
