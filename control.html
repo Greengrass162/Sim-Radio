@@ -733,73 +733,68 @@ function initPanel() {
     document.getElementById('panelLiveDot').classList.add('on');
     document.getElementById('panelStatusText').textContent = 'Panel online — waiting for drivers';
     log('Panel online: ' + id, 'connect');
-    // Connect to OBS output now that peer is ready
     tryConnectOBS(null);
   });
 
-  // Create a silent stream to send back to drivers — keeps WebRTC connection alive
-  let silentStream = null;
-  try {
-    const ctx = new AudioContext();
-    const dest = ctx.createMediaStreamDestination();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    gain.gain.value = 0; // silent
-    osc.connect(gain);
-    gain.connect(dest);
-    osc.start();
-    silentStream = dest.stream;
-  } catch(e) {
-    silentStream = null;
-  }
-
-  peer.on('call', (call) => {
-    const meta = call.metadata || {};
-    const driverName = meta.driverName || 'Unknown Driver';
-    const peerId = call.peer;
-
-    log('Incoming: ' + driverName, 'connect');
-    // Answer with silent stream to keep connection alive
-    call.answer(silentStream);
-
-    call.on('stream', (stream) => {
-      if (drivers[peerId]) {
-        // Reconnect — update stream
-        drivers[peerId].stream = stream;
-        drivers[peerId].name = driverName;
-        attachStream(peerId, stream);
-        updateCard(peerId);
-      } else {
-        registerDriver(peerId, driverName, stream);
-      }
-    });
-
-    call.on('close', () => {
-      if (drivers[peerId]) {
-        drivers[peerId].connected = false;
-        updateCard(peerId);
-        connectedCount = Math.max(0, connectedCount - 1);
-        updateConnCount();
-        log('Disconnected: ' + driverName, 'disconnect');
-      }
-    });
-
-    call.on('error', () => {
-      if (drivers[peerId]) {
-        drivers[peerId].connected = false;
-        updateCard(peerId);
-      }
-    });
-  });
-
+  // Drivers connect via data channel now — no WebRTC calls
   peer.on('connection', (conn) => {
-    // OBS page data connection
+    const meta = conn.metadata || {};
+
+    // OBS connection has no driverName
+    if (!meta.driverName) {
+      conn.on('open', () => {
+        obsConnection = conn;
+        log('OBS output connected', 'connect');
+        conn.on('close', () => { obsConnection = null; log('OBS disconnected', 'disconnect'); });
+      });
+      return;
+    }
+
+    const driverName = meta.driverName;
+    const peerId = conn.peer;
+
     conn.on('open', () => {
-      obsConnection = conn;
-      log('OBS output connected', 'connect');
-    });
-    conn.on('close', () => {
-      obsConnection = null;
+      log('Driver connected: ' + driverName, 'connect');
+      connectedCount++;
+      updateConnCount();
+
+      // Register driver if not already
+      if (!drivers[peerId]) {
+        drivers[peerId] = {
+          peerId, name: driverName, connected: true,
+          chunks: [], allChunks: [], chunkTimestamps: [],
+          bufferDuration: 0, cropStart: 0.1, cropEnd: 0.9,
+          animFrame: null, waveformData: [], cardEl: null,
+          mimeType: 'audio/webm', pollInterval: null,
+        };
+        connectedCount--;
+        connectedCount++;
+        createCard(peerId);
+        startWaveformDraw(peerId);
+      } else {
+        drivers[peerId].connected = true;
+        drivers[peerId].name = driverName;
+        updateCard(peerId);
+      }
+      updateConnCount();
+
+      conn.on('data', (raw) => {
+        try {
+          const msg = JSON.parse(raw);
+          if (msg.type === 'ping') return;
+          if (msg.type === 'chunk') handleAudioChunk(peerId, msg);
+        } catch(e) {}
+      });
+
+      conn.on('close', () => {
+        if (drivers[peerId]) {
+          drivers[peerId].connected = false;
+          updateCard(peerId);
+          connectedCount = Math.max(0, connectedCount - 1);
+          updateConnCount();
+          log('Disconnected: ' + driverName, 'disconnect');
+        }
+      });
     });
   });
 
@@ -812,142 +807,66 @@ function initPanel() {
   });
 }
 
-// ---- DRIVER MANAGEMENT ----
-function registerDriver(peerId, name, stream) {
-  drivers[peerId] = {
-    peerId,
-    name,
-    stream,
-    connected: true,
-    audioCtx: null,
-    analyser: null,
-    recorder: null,
-    chunks: [],
-    buffer: [], // rolling buffer of Float32Arrays
-    bufferDuration: 0,
-    cropStart: 0.1,
-    cropEnd: 0.9,
-    animFrame: null,
-    waveformData: [],
-    cardEl: null,
-  };
-
-  connectedCount++;
-  updateConnCount();
-
-  // Create or update card
-  const existingCard = document.querySelector(`[data-peer="${peerId}"]`);
-  if (existingCard) {
-    drivers[peerId].cardEl = existingCard;
-    updateCard(peerId);
-  } else {
-    createCard(peerId);
-  }
-
-  attachStream(peerId, stream);
-  log('Connected: ' + name, 'connect');
-}
-
-function attachStream(peerId, stream) {
+// ---- AUDIO CHUNK HANDLER ----
+function handleAudioChunk(peerId, msg) {
   const d = drivers[peerId];
   if (!d) return;
 
-  if (d.pollInterval) clearInterval(d.pollInterval);
-  if (d.mediaRecorder && d.mediaRecorder.state !== 'inactive') { try { d.mediaRecorder.stop(); } catch(e){} }
-  if (d.audioCtx) { try { d.audioCtx.close(); } catch(e){} }
+  d.mimeType = msg.mimeType || 'audio/webm';
 
-  d.chunks = [];
-  d.allChunks = [];
-  d.chunkTimestamps = [];
-  d.bufferDuration = 0;
-  d.waveformData = [];
+  // Decode base64 chunk back to blob
+  const binary = atob(msg.data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: d.mimeType });
 
-  const setDbg = (txt) => { const el = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]'); if (el) el.textContent = txt; };
-
-  const tracks = stream.getAudioTracks();
-  setDbg(`tracks:${tracks.length} readyState:${tracks[0] ? tracks[0].readyState : 'none'}`);
-
-  if (!tracks.length) { log('No audio tracks — ' + d.name, 'fire'); return; }
-
-  // Pick best mime type
-  const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg']
-    .find(m => MediaRecorder.isTypeSupported(m)) || '';
-
-  let mr;
-  try {
-    mr = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-  } catch(e) {
-    // Fallback: route through AudioContext destination
-    try {
-      const ctx = new AudioContext();
-      ctx.resume();
-      d.audioCtx = ctx;
-      const src = ctx.createMediaStreamSource(stream);
-      const dst = ctx.createMediaStreamDestination();
-      src.connect(dst);
-      mr = new MediaRecorder(dst.stream);
-      log('Using AudioContext fallback for ' + d.name, 'connect');
-    } catch(e2) {
-      setDbg('MediaRecorder failed: ' + e2.message);
-      return;
-    }
-  }
-
-  d.mediaRecorder = mr;
-  log('Recorder: ' + mr.mimeType + ' for ' + d.name, 'connect');
-
-  mr.ondataavailable = (e) => {
-    if (!e.data || e.data.size < 50) {
-      setDbg(`empty chunk (${e.data ? e.data.size : 0}b) — check mic on driver page`);
-      return;
-    }
-
-    d.allChunks.push(e.data);
+  // Keep header chunk (first one) always
+  if (msg.isFirst || d.allChunks.length === 0) {
+    d.allChunks = [blob];
+  } else {
+    d.allChunks.push(blob);
     if (d.allChunks.length > BUFFER_SECONDS + 1) {
       d.allChunks = [d.allChunks[0], ...d.allChunks.slice(-BUFFER_SECONDS)];
     }
-    d.chunks.push(e.data);
-    d.chunkTimestamps.push(Date.now());
-    while (d.chunks.length > BUFFER_SECONDS) { d.chunks.shift(); d.chunkTimestamps.shift(); }
+  }
 
-    const fireBtn = d.cardEl && d.cardEl.querySelector('[data-fire-btn]');
-    const previewBtn = d.cardEl && d.cardEl.querySelector('[data-preview-btn]');
-    if (fireBtn && d.connected) fireBtn.disabled = false;
-    if (previewBtn && d.connected) previewBtn.disabled = false;
+  d.chunks.push(blob);
+  d.chunkTimestamps.push(Date.now());
+  while (d.chunks.length > BUFFER_SECONDS) { d.chunks.shift(); d.chunkTimestamps.shift(); }
+  d.bufferDuration = d.chunks.length;
 
-    setDbg(`chunks:${d.chunks.length} size:${e.data.size}b — decoding...`);
+  const fireBtn = d.cardEl && d.cardEl.querySelector('[data-fire-btn]');
+  const previewBtn = d.cardEl && d.cardEl.querySelector('[data-preview-btn]');
+  if (fireBtn && d.connected) fireBtn.disabled = false;
+  if (previewBtn && d.connected) previewBtn.disabled = false;
 
-    // Decode full blob for waveform
-    new Blob(d.allChunks, { type: mr.mimeType }).arrayBuffer().then(buf => {
-      const ctx = new AudioContext();
-      ctx.decodeAudioData(buf.slice(0), (decoded) => {
-        ctx.close();
-        const ch = decoded.getChannelData(0);
-        const pts = 200, step = Math.max(1, Math.floor(ch.length / pts));
-        const newData = [];
-        for (let i = 0; i < pts; i++) {
-          const s = i * step, end = Math.min(s + step, ch.length);
-          let rmsSum = 0;
-          for (let j = s; j < end; j++) rmsSum += ch[j] * ch[j];
-          newData.push(Math.sqrt(rmsSum / (end - s)));
-        }
-        d.waveformData = newData;
-        setDbg(`chunks:${d.chunks.length} dur:${decoded.duration.toFixed(1)}s peak:${Math.max(...newData).toFixed(4)}`);
-      }, (err) => {
-        ctx.close();
-        setDbg(`decode err — size:${e.data.size}b chunks:${d.chunks.length}`);
-      });
+  const setDbg = (txt) => { const el = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]'); if (el) el.textContent = txt; };
+  setDbg(`chunks:${d.chunks.length} size:${msg.size}b — decoding...`);
+
+  // Decode for waveform
+  new Blob(d.allChunks, { type: d.mimeType }).arrayBuffer().then(buf => {
+    const ctx = new AudioContext();
+    ctx.decodeAudioData(buf.slice(0), (decoded) => {
+      ctx.close();
+      const ch = decoded.getChannelData(0);
+      const pts = 200, step = Math.max(1, Math.floor(ch.length / pts));
+      const newData = [];
+      for (let i = 0; i < pts; i++) {
+        const s = i * step, end = Math.min(s + step, ch.length);
+        let sum = 0;
+        for (let j = s; j < end; j++) sum += ch[j] * ch[j];
+        newData.push(Math.sqrt(sum / (end - s)));
+      }
+      d.waveformData = newData;
+      const peak = Math.max(...newData);
+      setDbg(`chunks:${d.chunks.length} dur:${decoded.duration.toFixed(1)}s peak:${peak.toFixed(4)}`);
+    }, (err) => {
+      ctx.close();
+      setDbg(`decode err — chunks:${d.chunks.length}`);
     });
-  };
-
-  mr.onerror = (e) => setDbg('recorder error: ' + e.error);
-  mr.start(1000);
-
-  d.pollInterval = setInterval(() => { d.bufferDuration = Math.min(d.chunks.length, BUFFER_SECONDS); }, 500);
-  d.connected = true;
-  updateCard(peerId);
-  startWaveformDraw(peerId);
+  });
 }
+
 
 
 // ---- CARD CREATION ----
@@ -1447,6 +1366,6 @@ window.addEventListener('load', () => {
   }, 500);
 });
 </script>
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V9</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V10</div>
 </body>
 </html>
