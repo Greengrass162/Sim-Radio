@@ -852,14 +852,9 @@ function attachStream(peerId, stream) {
   const d = drivers[peerId];
   if (!d) return;
 
-  if (d.audioCtx) { try { d.audioCtx.close(); } catch(e){} }
   if (d.pollInterval) clearInterval(d.pollInterval);
-  if (d.mediaRecorder && d.mediaRecorder.state !== 'inactive') {
-    try { d.mediaRecorder.stop(); } catch(e) {}
-  }
-
-  const tracks = stream.getAudioTracks();
-  log('Stream: ' + tracks.length + ' track(s) — ' + (tracks[0] ? 'enabled:' + tracks[0].enabled + ' muted:' + tracks[0].muted : 'none'), 'connect');
+  if (d.mediaRecorder && d.mediaRecorder.state !== 'inactive') { try { d.mediaRecorder.stop(); } catch(e){} }
+  if (d.audioCtx) { try { d.audioCtx.close(); } catch(e){} }
 
   d.chunks = [];
   d.allChunks = [];
@@ -867,32 +862,43 @@ function attachStream(peerId, stream) {
   d.bufferDuration = 0;
   d.waveformData = [];
 
-  // Use AudioContext to route the stream — this was working before (chunks:40)
-  d.audioCtx = new AudioContext();
-  d.audioCtx.resume();
-  const source = d.audioCtx.createMediaStreamSource(stream);
-  const dest = d.audioCtx.createMediaStreamDestination();
-  source.connect(dest);
+  const setDbg = (txt) => { const el = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]'); if (el) el.textContent = txt; };
 
-  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-    ? 'audio/webm;codecs=opus'
-    : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+  const tracks = stream.getAudioTracks();
+  setDbg(`tracks:${tracks.length} readyState:${tracks[0] ? tracks[0].readyState : 'none'}`);
 
-  let mediaRecorder;
+  if (!tracks.length) { log('No audio tracks — ' + d.name, 'fire'); return; }
+
+  // Pick best mime type
+  const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg']
+    .find(m => MediaRecorder.isTypeSupported(m)) || '';
+
+  let mr;
   try {
-    mediaRecorder = mimeType ? new MediaRecorder(dest.stream, { mimeType }) : new MediaRecorder(dest.stream);
+    mr = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
   } catch(e) {
-    log('MediaRecorder failed: ' + e.message, 'fire');
-    return;
+    // Fallback: route through AudioContext destination
+    try {
+      const ctx = new AudioContext();
+      ctx.resume();
+      d.audioCtx = ctx;
+      const src = ctx.createMediaStreamSource(stream);
+      const dst = ctx.createMediaStreamDestination();
+      src.connect(dst);
+      mr = new MediaRecorder(dst.stream);
+      log('Using AudioContext fallback for ' + d.name, 'connect');
+    } catch(e2) {
+      setDbg('MediaRecorder failed: ' + e2.message);
+      return;
+    }
   }
 
-  log('Recorder started — mime: ' + mediaRecorder.mimeType, 'connect');
-  d.mediaRecorder = mediaRecorder;
+  d.mediaRecorder = mr;
+  log('Recorder: ' + mr.mimeType + ' for ' + d.name, 'connect');
 
-  mediaRecorder.ondataavailable = (e) => {
-    const dbg = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]');
-    if (!e.data || e.data.size === 0) {
-      if (dbg) dbg.textContent = 'chunk empty — no audio signal';
+  mr.ondataavailable = (e) => {
+    if (!e.data || e.data.size < 50) {
+      setDbg(`empty chunk (${e.data ? e.data.size : 0}b) — check mic on driver page`);
       return;
     }
 
@@ -909,41 +915,35 @@ function attachStream(peerId, stream) {
     if (fireBtn && d.connected) fireBtn.disabled = false;
     if (previewBtn && d.connected) previewBtn.disabled = false;
 
-    if (dbg) dbg.textContent = `chunks:${d.chunks.length} size:${e.data.size}b — decoding...`;
+    setDbg(`chunks:${d.chunks.length} size:${e.data.size}b — decoding...`);
 
-    // Decode for waveform — use fresh blob each time
-    new Blob(d.allChunks, { type: mediaRecorder.mimeType }).arrayBuffer().then(buf => {
+    // Decode full blob for waveform
+    new Blob(d.allChunks, { type: mr.mimeType }).arrayBuffer().then(buf => {
       const ctx = new AudioContext();
-      ctx.decodeAudioData(buf.slice(0)).then(decoded => {
+      ctx.decodeAudioData(buf.slice(0), (decoded) => {
         ctx.close();
         const ch = decoded.getChannelData(0);
-        const pts = 200;
-        const step = Math.max(1, Math.floor(ch.length / pts));
+        const pts = 200, step = Math.max(1, Math.floor(ch.length / pts));
         const newData = [];
         for (let i = 0; i < pts; i++) {
           const s = i * step, end = Math.min(s + step, ch.length);
-          let sum = 0;
-          for (let j = s; j < end; j++) sum += ch[j] * ch[j];
-          // NO floor — raw RMS so silence is actually silent
-          newData.push(Math.sqrt(sum / (end - s)));
+          let rmsSum = 0;
+          for (let j = s; j < end; j++) rmsSum += ch[j] * ch[j];
+          newData.push(Math.sqrt(rmsSum / (end - s)));
         }
         d.waveformData = newData;
-        d.decodedBuffer = decoded; // cache for preview playback
-        if (dbg) dbg.textContent = `chunks:${d.chunks.length} dur:${decoded.duration.toFixed(1)}s peak:${Math.max(...newData).toFixed(4)}`;
-      }).catch(err => {
+        setDbg(`chunks:${d.chunks.length} dur:${decoded.duration.toFixed(1)}s peak:${Math.max(...newData).toFixed(4)}`);
+      }, (err) => {
         ctx.close();
-        if (dbg) dbg.textContent = `decode err: ${err.message}`;
+        setDbg(`decode err — size:${e.data.size}b chunks:${d.chunks.length}`);
       });
     });
   };
 
-  mediaRecorder.onerror = (e) => log('Recorder error: ' + e.error, 'fire');
-  mediaRecorder.start(1000);
+  mr.onerror = (e) => setDbg('recorder error: ' + e.error);
+  mr.start(1000);
 
-  d.pollInterval = setInterval(() => {
-    d.bufferDuration = Math.min(d.chunks.length, BUFFER_SECONDS);
-  }, 500);
-
+  d.pollInterval = setInterval(() => { d.bufferDuration = Math.min(d.chunks.length, BUFFER_SECONDS); }, 500);
   d.connected = true;
   updateCard(peerId);
   startWaveformDraw(peerId);
@@ -1447,6 +1447,6 @@ window.addEventListener('load', () => {
   }, 500);
 });
 </script>
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V8</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V9</div>
 </body>
 </html>
