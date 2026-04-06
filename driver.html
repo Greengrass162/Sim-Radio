@@ -435,6 +435,9 @@ async function startConnection() {
   });
 }
 
+let heartbeatInterval = null;
+let currentCall = null;
+
 function callPanel(driverName, myId) {
   setDot('panelDot', 'pending');
   setText('panelStatus', 'Calling control panel...');
@@ -449,6 +452,17 @@ function callPanel(driverName, myId) {
     return;
   }
 
+  currentCall = call;
+
+  // Keepalive data channel — prevents WebRTC idle timeout
+  const dataConn = peer.connect(PANEL_ID, { reliable: true, metadata: { type: 'heartbeat', driverName } });
+  dataConn.on('open', () => {
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    heartbeatInterval = setInterval(() => {
+      if (dataConn.open) dataConn.send('ping');
+    }, 5000);
+  });
+
   call.on('stream', () => {
     setDot('panelDot', 'active');
     setText('panelStatus', '<strong>Live to control panel ✓</strong>');
@@ -457,23 +471,25 @@ function callPanel(driverName, myId) {
   call.on('error', () => {
     setDot('panelDot', 'error');
     setText('panelStatus', 'Connection to panel lost — retrying...');
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
     setTimeout(() => callPanel(driverName, myId), 4000);
   });
 
   call.on('close', () => {
     setDot('panelDot', 'error');
     setText('panelStatus', 'Panel disconnected — retrying...');
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
     setTimeout(() => callPanel(driverName, myId), 4000);
   });
 
-  // If no stream back within 5s, panel might not be open yet
+  // If no stream back within 8s, panel might not be open yet
   setTimeout(() => {
     if (document.getElementById('panelDot').className.includes('pending')) {
       setText('panelStatus', 'Panel not open yet — retrying...');
       call.close();
       setTimeout(() => callPanel(driverName, myId), 4000);
     }
-  }, 5000);
+  }, 8000);
 }
 
 function startMeter(stream) {
