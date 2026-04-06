@@ -911,25 +911,28 @@ function attachStream(peerId, stream) {
 
     if (dbg) dbg.textContent = `chunks:${d.chunks.length} size:${e.data.size}b — decoding...`;
 
-    // Decode for waveform
+    // Decode for waveform — use fresh blob each time
     new Blob(d.allChunks, { type: mediaRecorder.mimeType }).arrayBuffer().then(buf => {
       const ctx = new AudioContext();
-      ctx.decodeAudioData(buf).then(decoded => {
+      ctx.decodeAudioData(buf.slice(0)).then(decoded => {
         ctx.close();
         const ch = decoded.getChannelData(0);
-        const pts = 200, step = Math.max(1, Math.floor(ch.length / pts));
+        const pts = 200;
+        const step = Math.max(1, Math.floor(ch.length / pts));
         const newData = [];
         for (let i = 0; i < pts; i++) {
           const s = i * step, end = Math.min(s + step, ch.length);
           let sum = 0;
           for (let j = s; j < end; j++) sum += ch[j] * ch[j];
-          newData.push(Math.max(Math.sqrt(sum / (end - s)), 0.003));
+          // NO floor — raw RMS so silence is actually silent
+          newData.push(Math.sqrt(sum / (end - s)));
         }
         d.waveformData = newData;
+        d.decodedBuffer = decoded; // cache for preview playback
         if (dbg) dbg.textContent = `chunks:${d.chunks.length} dur:${decoded.duration.toFixed(1)}s peak:${Math.max(...newData).toFixed(4)}`;
       }).catch(err => {
         ctx.close();
-        if (dbg) dbg.textContent = `decode err: ${err.message} — chunks:${d.chunks.length}`;
+        if (dbg) dbg.textContent = `decode err: ${err.message}`;
       });
     });
   };
@@ -1108,14 +1111,16 @@ function startWaveformDraw(peerId) {
     const barW = W / Math.max(data.length, 1);
     const s = d.cropStart, e = d.cropEnd;
 
+    // Find peak for normalization — if all silence, peak will be near 0
+    const peak = Math.max(...data, 0.001);
+
     for (let i = 0; i < data.length; i++) {
       const x = i * barW;
       const pct = i / data.length;
       const inCrop = pct >= s && pct <= e;
-      // Normalize against the peak value so waveform fills the canvas
-      const peak = Math.max(...data, 0.01);
+      // Normalize to peak so loud parts fill the canvas, quiet parts are short
       const normalized = data[i] / peak;
-      const h = Math.max(2, normalized * H * 0.85);
+      const h = Math.max(1, normalized * H * 0.9);
 
       ctx.fillStyle = inCrop ? '#e8181b' : '#2a2a35';
       ctx.fillRect(x, (H - h) / 2, Math.max(barW - 1, 1), h);
@@ -1139,53 +1144,66 @@ function startWaveformDraw(peerId) {
 
 async function previewClip(peerId) {
   const d = drivers[peerId];
+  const btn = d.cardEl.querySelector('[data-preview-btn]');
+
   if (!d || !d.allChunks || d.allChunks.length < 2) {
-    log('Preview: not enough audio buffered yet — wait a few seconds', 'disconnect');
+    log('Preview: buffer not ready — wait a few seconds', 'disconnect');
     return;
   }
 
-  const btn = d.cardEl.querySelector('[data-preview-btn]');
   btn.textContent = '▶ PLAYING...';
   btn.disabled = true;
+
+  const reset = () => { btn.textContent = '▶ PREVIEW'; btn.disabled = false; };
 
   const totalChunks = d.chunks.length;
   const startIdx = Math.floor(d.cropStart * totalChunks);
   const endIdx = Math.max(startIdx + 1, Math.floor(d.cropEnd * totalChunks));
   const selected = d.chunks.slice(startIdx, endIdx);
-
-  // Always prepend the header chunk so the blob is decodable
   const playChunks = [d.allChunks[0], ...selected];
   const mimeType = d.mediaRecorder ? d.mediaRecorder.mimeType : 'audio/webm';
-  const blob = new Blob(playChunks, { type: mimeType });
 
-  // Decode via AudioContext and play — more reliable than Audio element for webm chunks
-  const arrayBuf = await blob.arrayBuffer();
-  const ctx = new AudioContext();
-  await ctx.resume();
+  try {
+    const blob = new Blob(playChunks, { type: mimeType });
+    const arrayBuf = await blob.arrayBuffer();
+    const ctx = new AudioContext();
+    await ctx.resume();
 
-  ctx.decodeAudioData(arrayBuf).then(decoded => {
-    const source = ctx.createBufferSource();
-    source.buffer = decoded;
-    source.connect(ctx.destination);
-    source.start(0);
-    log('Preview: ' + d.name + ' (' + decoded.duration.toFixed(1) + 's)', 'info');
-    source.onended = () => {
+    ctx.decodeAudioData(arrayBuf.slice(0), (decoded) => {
+      // Crop the decoded buffer to the selected time range
+      const totalDur = decoded.duration;
+      const startTime = d.cropStart * totalDur;
+      const endTime = d.cropEnd * totalDur;
+      const cropDur = endTime - startTime;
+
+      const sampleRate = decoded.sampleRate;
+      const startSample = Math.floor(startTime * sampleRate);
+      const cropSamples = Math.floor(cropDur * sampleRate);
+
+      const croppedBuf = ctx.createBuffer(decoded.numberOfChannels, cropSamples, sampleRate);
+      for (let c = 0; c < decoded.numberOfChannels; c++) {
+        const src = decoded.getChannelData(c).slice(startSample, startSample + cropSamples);
+        croppedBuf.copyToChannel(src, c);
+      }
+
+      const src = ctx.createBufferSource();
+      src.buffer = croppedBuf;
+      src.connect(ctx.destination);
+      src.start(0);
+      log('Preview: ' + d.name + ' (' + cropDur.toFixed(1) + 's)', 'info');
+
+      src.onended = () => { ctx.close(); reset(); };
+      setTimeout(() => { try { ctx.close(); } catch(e){} reset(); }, (cropDur * 1000) + 500);
+
+    }, (err) => {
       ctx.close();
-      btn.textContent = '▶ PREVIEW';
-      btn.disabled = false;
-    };
-    // Safety timeout
-    setTimeout(() => {
-      try { ctx.close(); } catch(e) {}
-      btn.textContent = '▶ PREVIEW';
-      btn.disabled = false;
-    }, (decoded.duration * 1000) + 1000);
-  }).catch(err => {
-    ctx.close();
-    log('Preview decode failed: ' + err.message, 'fire');
-    btn.textContent = '▶ PREVIEW';
-    btn.disabled = false;
-  });
+      log('Preview decode failed: ' + err, 'fire');
+      reset();
+    });
+  } catch(err) {
+    log('Preview error: ' + err.message, 'fire');
+    reset();
+  }
 }
 
 async function fireClip(peerId) {
@@ -1429,6 +1447,6 @@ window.addEventListener('load', () => {
   }, 500);
 });
 </script>
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V7</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V8</div>
 </body>
 </html>
