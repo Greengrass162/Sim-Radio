@@ -900,41 +900,49 @@ function attachStream(peerId, stream) {
         d.chunkTimestamps.shift();
       }
       const fireBtn = d.cardEl && d.cardEl.querySelector('[data-fire-btn]');
+      const previewBtn = d.cardEl && d.cardEl.querySelector('[data-preview-btn]');
       if (fireBtn && d.connected) fireBtn.disabled = false;
+      if (previewBtn && d.connected) previewBtn.disabled = false;
+
+      // Decode chunk to get real amplitude for waveform
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const arrayBuf = reader.result;
+        d.audioCtx.decodeAudioData(arrayBuf.slice(0)).then(decoded => {
+          const channelData = decoded.getChannelData(0);
+          // Split into 20 samples for this chunk
+          const step = Math.floor(channelData.length / 20);
+          for (let i = 0; i < 20; i++) {
+            const start = i * step;
+            const end = Math.min(start + step, channelData.length);
+            let sum = 0;
+            for (let j = start; j < end; j++) sum += channelData[j] * channelData[j];
+            const rms = Math.sqrt(sum / (end - start));
+            d.waveformData.push(Math.max(rms, 0.002));
+            if (d.waveformData.length > 200) d.waveformData.shift();
+          }
+        }).catch(() => {
+          // Decode failed — push flat line so waveform still draws
+          for (let i = 0; i < 20; i++) {
+            d.waveformData.push(0.002);
+            if (d.waveformData.length > 200) d.waveformData.shift();
+          }
+        });
+      };
+      reader.readAsArrayBuffer(e.data);
     }
   };
 
   mediaRecorder.start(1000);
 
-  // Poll analyser for waveform
+  // Poll for UI updates only — waveform data now comes from decoded chunks
   d.pollInterval = setInterval(() => {
-    if (!d.analyser) return;
-    if (d.audioCtx.state === 'suspended') {
-      d.audioCtx.resume();
-      return;
-    }
-
-    const data = new Uint8Array(d.analyser.fftSize);
-    d.analyser.getByteTimeDomainData(data);
-
-    let sum = 0;
-    for (let i = 0; i < data.length; i++) {
-      const v = (data[i] - 128) / 128;
-      sum += v * v;
-    }
-    const rms = Math.sqrt(sum / data.length);
-
-    // Always push something so waveform draws even in silence
-    d.waveformData.push(Math.max(rms, 0.002));
-    if (d.waveformData.length > 200) d.waveformData.shift();
     d.bufferDuration = Math.min(d.chunks.length, BUFFER_SECONDS);
-
-    // Update debug line
     const dbg = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]');
     if (dbg) {
-      dbg.textContent = `ctx:${d.audioCtx.state} rms:${rms.toFixed(4)} chunks:${d.chunks.length} pts:${d.waveformData.length}`;
+      dbg.textContent = `ctx:${d.audioCtx.state} chunks:${d.chunks.length} pts:${d.waveformData.length} peak:${d.waveformData.length ? Math.max(...d.waveformData.slice(-20)).toFixed(4) : '0'}`;
     }
-  }, 50);
+  }, 200);
 
   d.connected = true;
   updateCard(peerId);
@@ -1401,6 +1409,6 @@ window.addEventListener('load', () => {
   }, 500);
 });
 </script>
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V2</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V3</div>
 </body>
 </html>
