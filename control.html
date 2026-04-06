@@ -858,7 +858,6 @@ function attachStream(peerId, stream) {
     try { d.mediaRecorder.stop(); } catch(e) {}
   }
 
-  // Log stream details
   const tracks = stream.getAudioTracks();
   log('Stream: ' + tracks.length + ' track(s) — ' + (tracks[0] ? 'enabled:' + tracks[0].enabled + ' muted:' + tracks[0].muted : 'none'), 'connect');
 
@@ -868,14 +867,20 @@ function attachStream(peerId, stream) {
   d.bufferDuration = 0;
   d.waveformData = [];
 
-  // Record directly from the raw WebRTC stream
+  // Use AudioContext to route the stream — this was working before (chunks:40)
+  d.audioCtx = new AudioContext();
+  d.audioCtx.resume();
+  const source = d.audioCtx.createMediaStreamSource(stream);
+  const dest = d.audioCtx.createMediaStreamDestination();
+  source.connect(dest);
+
   const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
     ? 'audio/webm;codecs=opus'
     : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
 
   let mediaRecorder;
   try {
-    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    mediaRecorder = mimeType ? new MediaRecorder(dest.stream, { mimeType }) : new MediaRecorder(dest.stream);
   } catch(e) {
     log('MediaRecorder failed: ' + e.message, 'fire');
     return;
@@ -887,7 +892,7 @@ function attachStream(peerId, stream) {
   mediaRecorder.ondataavailable = (e) => {
     const dbg = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]');
     if (!e.data || e.data.size === 0) {
-      if (dbg) dbg.textContent = 'chunk empty — stream may have no audio';
+      if (dbg) dbg.textContent = 'chunk empty — no audio signal';
       return;
     }
 
@@ -924,7 +929,7 @@ function attachStream(peerId, stream) {
         if (dbg) dbg.textContent = `chunks:${d.chunks.length} dur:${decoded.duration.toFixed(1)}s peak:${Math.max(...newData).toFixed(4)}`;
       }).catch(err => {
         ctx.close();
-        if (dbg) dbg.textContent = `decode err: ${err.message}`;
+        if (dbg) dbg.textContent = `decode err: ${err.message} — chunks:${d.chunks.length}`;
       });
     });
   };
@@ -935,12 +940,6 @@ function attachStream(peerId, stream) {
   d.pollInterval = setInterval(() => {
     d.bufferDuration = Math.min(d.chunks.length, BUFFER_SECONDS);
   }, 500);
-
-  // AudioContext for waveform analyser backup
-  try {
-    d.audioCtx = new AudioContext();
-    d.audioCtx.resume();
-  } catch(e) {}
 
   d.connected = true;
   updateCard(peerId);
@@ -1418,6 +1417,6 @@ window.addEventListener('load', () => {
   }, 500);
 });
 </script>
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V5</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V6</div>
 </body>
 </html>
