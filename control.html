@@ -1112,10 +1112,13 @@ function startWaveformDraw(peerId) {
       const x = i * barW;
       const pct = i / data.length;
       const inCrop = pct >= s && pct <= e;
-      const h = Math.max(2, data[i] * H * 8);
+      // Normalize against the peak value so waveform fills the canvas
+      const peak = Math.max(...data, 0.01);
+      const normalized = data[i] / peak;
+      const h = Math.max(2, normalized * H * 0.85);
 
       ctx.fillStyle = inCrop ? '#e8181b' : '#2a2a35';
-      ctx.fillRect(x, (H - h) / 2, barW - 1, h);
+      ctx.fillRect(x, (H - h) / 2, Math.max(barW - 1, 1), h);
     }
 
     // Playhead line (right edge = now)
@@ -1137,7 +1140,7 @@ function startWaveformDraw(peerId) {
 async function previewClip(peerId) {
   const d = drivers[peerId];
   if (!d || !d.allChunks || d.allChunks.length < 2) {
-    log('Preview: not enough audio buffered yet', 'disconnect');
+    log('Preview: not enough audio buffered yet — wait a few seconds', 'disconnect');
     return;
   }
 
@@ -1148,32 +1151,41 @@ async function previewClip(peerId) {
   const totalChunks = d.chunks.length;
   const startIdx = Math.floor(d.cropStart * totalChunks);
   const endIdx = Math.max(startIdx + 1, Math.floor(d.cropEnd * totalChunks));
-
-  // Always include chunk 0 (header) + selected range
-  const header = d.allChunks[0];
   const selected = d.chunks.slice(startIdx, endIdx);
-  const playChunks = [header, ...selected];
 
+  // Always prepend the header chunk so the blob is decodable
+  const playChunks = [d.allChunks[0], ...selected];
   const mimeType = d.mediaRecorder ? d.mediaRecorder.mimeType : 'audio/webm';
   const blob = new Blob(playChunks, { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const audio = new Audio(url);
 
-  audio.play().catch(e => {
-    log('Preview error: ' + e.message, 'fire');
+  // Decode via AudioContext and play — more reliable than Audio element for webm chunks
+  const arrayBuf = await blob.arrayBuffer();
+  const ctx = new AudioContext();
+  await ctx.resume();
+
+  ctx.decodeAudioData(arrayBuf).then(decoded => {
+    const source = ctx.createBufferSource();
+    source.buffer = decoded;
+    source.connect(ctx.destination);
+    source.start(0);
+    log('Preview: ' + d.name + ' (' + decoded.duration.toFixed(1) + 's)', 'info');
+    source.onended = () => {
+      ctx.close();
+      btn.textContent = '▶ PREVIEW';
+      btn.disabled = false;
+    };
+    // Safety timeout
+    setTimeout(() => {
+      try { ctx.close(); } catch(e) {}
+      btn.textContent = '▶ PREVIEW';
+      btn.disabled = false;
+    }, (decoded.duration * 1000) + 1000);
+  }).catch(err => {
+    ctx.close();
+    log('Preview decode failed: ' + err.message, 'fire');
     btn.textContent = '▶ PREVIEW';
     btn.disabled = false;
   });
-
-  audio.onended = () => { URL.revokeObjectURL(url); btn.textContent = '▶ PREVIEW'; btn.disabled = false; };
-  audio.onerror = (e) => {
-    URL.revokeObjectURL(url);
-    btn.textContent = '▶ PREVIEW';
-    btn.disabled = false;
-    log('Preview decode failed — try again in a few seconds', 'fire');
-  };
-
-  log('Preview: ' + d.name + ' (' + selected.length + 's)', 'info');
 }
 
 async function fireClip(peerId) {
@@ -1417,6 +1429,6 @@ window.addEventListener('load', () => {
   }, 500);
 });
 </script>
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V6</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V7</div>
 </body>
 </html>
