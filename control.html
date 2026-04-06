@@ -890,59 +890,67 @@ function attachStream(peerId, stream) {
   d.chunks = [];
   d.chunkTimestamps = [];
   d.bufferDuration = 0;
+  d.allChunks = []; // full stream including header
 
   mediaRecorder.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) {
+      // allChunks keeps everything including the header chunk (first chunk)
+      d.allChunks.push(e.data);
+      // Keep rolling window — but always keep chunk 0 (has stream header)
+      if (d.allChunks.length > BUFFER_SECONDS + 1) {
+        d.allChunks = [d.allChunks[0], ...d.allChunks.slice(-(BUFFER_SECONDS))];
+      }
+
       d.chunks.push(e.data);
       d.chunkTimestamps.push(Date.now());
       while (d.chunks.length > BUFFER_SECONDS) {
         d.chunks.shift();
         d.chunkTimestamps.shift();
       }
+
       const fireBtn = d.cardEl && d.cardEl.querySelector('[data-fire-btn]');
       const previewBtn = d.cardEl && d.cardEl.querySelector('[data-preview-btn]');
       if (fireBtn && d.connected) fireBtn.disabled = false;
       if (previewBtn && d.connected) previewBtn.disabled = false;
 
-      // Decode chunk to get real amplitude for waveform
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const arrayBuf = reader.result;
-        d.audioCtx.decodeAudioData(arrayBuf.slice(0)).then(decoded => {
+      // Decode chunk for waveform using full blob with header
+      const fullBlob = new Blob(d.allChunks, { type: mediaRecorder.mimeType });
+      fullBlob.arrayBuffer().then(buf => {
+        d.audioCtx.decodeAudioData(buf).then(decoded => {
           const channelData = decoded.getChannelData(0);
-          // Split into 20 samples for this chunk
-          const step = Math.floor(channelData.length / 20);
-          for (let i = 0; i < 20; i++) {
+          // Rebuild waveform data from full decoded audio
+          const totalDuration = decoded.duration;
+          const pointCount = 200;
+          const step = Math.floor(channelData.length / pointCount);
+          if (step < 1) return;
+          const newData = [];
+          for (let i = 0; i < pointCount; i++) {
             const start = i * step;
             const end = Math.min(start + step, channelData.length);
             let sum = 0;
             for (let j = start; j < end; j++) sum += channelData[j] * channelData[j];
-            const rms = Math.sqrt(sum / (end - start));
-            d.waveformData.push(Math.max(rms, 0.002));
-            if (d.waveformData.length > 200) d.waveformData.shift();
+            newData.push(Math.max(Math.sqrt(sum / (end - start)), 0.002));
           }
-        }).catch(() => {
-          // Decode failed — push flat line so waveform still draws
-          for (let i = 0; i < 20; i++) {
-            d.waveformData.push(0.002);
-            if (d.waveformData.length > 200) d.waveformData.shift();
+          d.waveformData = newData;
+
+          const dbg = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]');
+          if (dbg) {
+            const peak = Math.max(...newData).toFixed(4);
+            dbg.textContent = `chunks:${d.chunks.length} dur:${totalDuration.toFixed(1)}s peak:${peak}`;
           }
+        }).catch(err => {
+          const dbg = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]');
+          if (dbg) dbg.textContent = `decode err: ${err.message} chunks:${d.chunks.length}`;
         });
-      };
-      reader.readAsArrayBuffer(e.data);
+      });
     }
   };
 
   mediaRecorder.start(1000);
 
-  // Poll for UI updates only — waveform data now comes from decoded chunks
   d.pollInterval = setInterval(() => {
     d.bufferDuration = Math.min(d.chunks.length, BUFFER_SECONDS);
-    const dbg = d.cardEl && d.cardEl.querySelector('[data-waveform-debug]');
-    if (dbg) {
-      dbg.textContent = `ctx:${d.audioCtx.state} chunks:${d.chunks.length} pts:${d.waveformData.length} peak:${d.waveformData.length ? Math.max(...d.waveformData.slice(-20)).toFixed(4) : '0'}`;
-    }
-  }, 200);
+  }, 500);
 
   d.connected = true;
   updateCard(peerId);
@@ -1138,8 +1146,8 @@ function startWaveformDraw(peerId) {
 
 async function previewClip(peerId) {
   const d = drivers[peerId];
-  if (!d || !d.chunks || d.chunks.length === 0) {
-    log('Preview: no audio buffered yet', 'disconnect');
+  if (!d || !d.allChunks || d.allChunks.length < 2) {
+    log('Preview: not enough audio buffered yet', 'disconnect');
     return;
   }
 
@@ -1150,25 +1158,32 @@ async function previewClip(peerId) {
   const totalChunks = d.chunks.length;
   const startIdx = Math.floor(d.cropStart * totalChunks);
   const endIdx = Math.max(startIdx + 1, Math.floor(d.cropEnd * totalChunks));
-  const selectedChunks = d.chunks.slice(startIdx, endIdx);
 
-  if (selectedChunks.length === 0) {
-    btn.textContent = '▶ PREVIEW';
-    btn.disabled = false;
-    return;
-  }
+  // Always include chunk 0 (header) + selected range
+  const header = d.allChunks[0];
+  const selected = d.chunks.slice(startIdx, endIdx);
+  const playChunks = [header, ...selected];
 
   const mimeType = d.mediaRecorder ? d.mediaRecorder.mimeType : 'audio/webm';
-  const blob = new Blob(selectedChunks, { type: mimeType });
+  const blob = new Blob(playChunks, { type: mimeType });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
 
-  audio.play().catch(e => log('Preview error: ' + e.message, 'fire'));
+  audio.play().catch(e => {
+    log('Preview error: ' + e.message, 'fire');
+    btn.textContent = '▶ PREVIEW';
+    btn.disabled = false;
+  });
 
   audio.onended = () => { URL.revokeObjectURL(url); btn.textContent = '▶ PREVIEW'; btn.disabled = false; };
-  audio.onerror = () => { URL.revokeObjectURL(url); btn.textContent = '▶ ERR'; btn.disabled = false; log('Preview decode error — audio format issue', 'fire'); };
+  audio.onerror = (e) => {
+    URL.revokeObjectURL(url);
+    btn.textContent = '▶ PREVIEW';
+    btn.disabled = false;
+    log('Preview decode failed — try again in a few seconds', 'fire');
+  };
 
-  log('Preview: ' + d.name + ' (' + selectedChunks.length + 's)', 'info');
+  log('Preview: ' + d.name + ' (' + selected.length + 's)', 'info');
 }
 
 async function fireClip(peerId) {
@@ -1183,17 +1198,20 @@ async function fireClip(peerId) {
   const totalChunks = d.chunks.length;
   const startIdx = Math.floor(d.cropStart * totalChunks);
   const endIdx = Math.max(startIdx + 1, Math.floor(d.cropEnd * totalChunks));
-  const selectedChunks = d.chunks.slice(startIdx, endIdx);
-  const clipDuration = selectedChunks.length; // ~1 second per chunk
+  const selected = d.chunks.slice(startIdx, endIdx);
 
-  if (selectedChunks.length === 0) {
+  // Include header chunk for proper decode on OBS side
+  const header = d.allChunks && d.allChunks[0];
+  const fireChunks = header ? [header, ...selected] : selected;
+  const clipDuration = selected.length;
+
+  if (clipDuration === 0) {
     btn.classList.remove('firing');
-    btn.textContent = '⬤ FIRE RADIO CLIP';
+    btn.textContent = '⬤ FIRE TO OBS';
     return;
   }
 
-  // Combine chunks into a single blob
-  const blob = new Blob(selectedChunks, { type: d.mediaRecorder.mimeType || 'audio/webm' });
+  const blob = new Blob(fireChunks, { type: d.mediaRecorder.mimeType || 'audio/webm' });
 
   // Convert to base64
   const base64 = await new Promise((resolve) => {
@@ -1226,7 +1244,7 @@ async function fireClip(peerId) {
 
   setTimeout(() => {
     btn.classList.remove('firing');
-    btn.textContent = '⬤ FIRE RADIO CLIP';
+    btn.textContent = '⬤ FIRE TO OBS';
   }, 300);
 
   d.cardEl.classList.add('recording');
@@ -1409,6 +1427,6 @@ window.addEventListener('load', () => {
   }, 500);
 });
 </script>
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V3</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V4</div>
 </body>
 </html>
