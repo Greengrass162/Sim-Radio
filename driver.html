@@ -436,76 +436,117 @@ async function startConnection() {
 }
 
 let heartbeatInterval = null;
-let currentCall = null;
+let dataConn = null;
+let localRecorder = null;
+let localChunks = [];
+let localAllChunks = [];
 
 function callPanel(driverName, myId) {
   setDot('panelDot', 'pending');
-  setText('panelStatus', 'Calling control panel...');
+  setText('panelStatus', 'Connecting to panel...');
 
-  const call = peer.call(PANEL_ID, localStream, {
-    metadata: { driverName, peerId: myId }
-  });
+  // Open a data channel to the panel for sending audio chunks
+  dataConn = peer.connect(PANEL_ID, { reliable: true, metadata: { driverName, peerId: myId, type: 'audio' } });
 
-  if (!call) {
-    setText('panelStatus', 'Panel not online yet — will retry...');
-    setTimeout(() => callPanel(driverName, myId), 4000);
-    return;
-  }
-
-  currentCall = call;
-
-  // Keepalive — send silent audio context ping every 4s to prevent idle timeout
-  if (heartbeatInterval) clearInterval(heartbeatInterval);
-  heartbeatInterval = setInterval(() => {
-    if (localStream && localStream.active) {
-      // Stream is still alive, nothing needed
-      // Just checking keeps the connection warm
-    } else {
-      clearInterval(heartbeatInterval);
-    }
-  }, 4000);
-
-  call.on('stream', () => {
+  dataConn.on('open', () => {
     setDot('panelDot', 'active');
     setText('panelStatus', '<strong>Live to control panel ✓</strong>');
-  });
+    log('Data channel open');
 
-  call.on('error', () => {
-    setDot('panelDot', 'error');
-    setText('panelStatus', 'Connection to panel lost — retrying...');
+    // Start recording mic locally
+    startLocalRecording(driverName);
+
+    // Keepalive ping every 4s
     if (heartbeatInterval) clearInterval(heartbeatInterval);
-    setTimeout(() => callPanel(driverName, myId), 4000);
+    heartbeatInterval = setInterval(() => {
+      if (dataConn && dataConn.open) {
+        dataConn.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 4000);
   });
 
-  call.on('close', () => {
+  dataConn.on('close', () => {
     setDot('panelDot', 'error');
     setText('panelStatus', 'Panel disconnected — retrying...');
     if (heartbeatInterval) clearInterval(heartbeatInterval);
+    if (localRecorder && localRecorder.state !== 'inactive') localRecorder.stop();
     setTimeout(() => callPanel(driverName, myId), 4000);
   });
 
+  dataConn.on('error', () => {
+    setDot('panelDot', 'error');
+    setText('panelStatus', 'Connection error — retrying...');
+    setTimeout(() => callPanel(driverName, myId), 4000);
+  });
+
+  // Timeout if panel not open
   setTimeout(() => {
     if (document.getElementById('panelDot').className.includes('pending')) {
       setText('panelStatus', 'Panel not open yet — retrying...');
-      call.close();
+      if (dataConn) dataConn.close();
       setTimeout(() => callPanel(driverName, myId), 4000);
     }
   }, 8000);
 }
 
+function startLocalRecording(driverName) {
+  const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg']
+    .find(m => MediaRecorder.isTypeSupported(m)) || '';
+
+  try {
+    localRecorder = mimeType
+      ? new MediaRecorder(localStream, { mimeType })
+      : new MediaRecorder(localStream);
+  } catch(e) {
+    setText('panelStatus', 'Recorder error: ' + e.message);
+    return;
+  }
+
+  localChunks = [];
+  localAllChunks = [];
+
+  localRecorder.ondataavailable = (e) => {
+    if (!e.data || e.data.size < 50) return;
+
+    // Store locally
+    localAllChunks.push(e.data);
+    if (localAllChunks.length > 61) {
+      localAllChunks = [localAllChunks[0], ...localAllChunks.slice(-60)];
+    }
+    localChunks.push(e.data);
+    if (localChunks.length > 60) localChunks.shift();
+
+    // Send chunk to panel via data channel
+    if (dataConn && dataConn.open) {
+      // Convert blob to base64 and send
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result.split(',')[1];
+        dataConn.send(JSON.stringify({
+          type: 'chunk',
+          driverName,
+          data: base64,
+          mimeType: localRecorder.mimeType,
+          isFirst: localAllChunks.length === 1,
+          size: e.data.size
+        }));
+      };
+      reader.readAsDataURL(e.data);
+    }
+  };
+
+  localRecorder.start(1000);
+  setText('panelStatus', '<strong>Live to control panel ✓</strong> — mic recording');
+}
+
+
 function startMeter(stream) {
   audioContext = new AudioContext();
-  // CRITICAL: resume AudioContext — required on Mac Chrome or mic audio is silent
   audioContext.resume().then(() => {
     const source = audioContext.createMediaStreamSource(stream);
     analyser = audioContext.createAnalyser();
     analyser.fftSize = 256;
     source.connect(analyser);
-    // Connect to destination to keep context alive and audio flowing
-    const gainNode = audioContext.createGain();
-    gainNode.gain.value = 0; // silent — we don't want echo
-    source.connect(gainNode);
-    gainNode.connect(audioContext.destination);
     document.getElementById('meterWrap').classList.add('visible');
     drawMeter();
   });
@@ -521,6 +562,6 @@ function drawMeter() {
   animFrame = requestAnimationFrame(drawMeter);
 }
 </script>
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Barlow Condensed',sans-serif;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V2</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Barlow Condensed',sans-serif;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V3</div>
 </body>
 </html>
