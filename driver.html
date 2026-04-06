@@ -495,15 +495,24 @@ function callPanel(driverName, myId) {
 
 function startMeter(stream) {
   audioContext = new AudioContext();
-  const source = audioContext.createMediaStreamSource(stream);
-  analyser = audioContext.createAnalyser();
-  analyser.fftSize = 256;
-  source.connect(analyser);
-  document.getElementById('meterWrap').classList.add('visible');
-  drawMeter();
+  // CRITICAL: resume AudioContext — required on Mac Chrome or mic audio is silent
+  audioContext.resume().then(() => {
+    const source = audioContext.createMediaStreamSource(stream);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    // Connect to destination to keep context alive and audio flowing
+    const gainNode = audioContext.createGain();
+    gainNode.gain.value = 0; // silent — we don't want echo
+    source.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    document.getElementById('meterWrap').classList.add('visible');
+    drawMeter();
+  });
 }
 
 function drawMeter() {
+  if (!analyser) { animFrame = requestAnimationFrame(drawMeter); return; }
   const data = new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(data);
   const avg = data.reduce((a,b) => a+b, 0) / data.length;
@@ -512,6 +521,6 @@ function drawMeter() {
   animFrame = requestAnimationFrame(drawMeter);
 }
 </script>
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Barlow Condensed',sans-serif;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V1</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Barlow Condensed',sans-serif;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V2</div>
 </body>
 </html>
