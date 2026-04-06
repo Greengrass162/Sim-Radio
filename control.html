@@ -659,7 +659,7 @@ canvas.waveform {
 
       <div id="generatedLinkBox" style="display:none;">
         <div style="font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--blue);background:var(--bg);border:1px solid var(--border);padding:8px 10px;word-break:break-all;margin-bottom:6px;max-height:60px;overflow-y:auto;" id="generatedLinkText"></div>
-        <button class="copy-btn" onclick="copyGeneratedLink()">Copy Link</button>
+        <button class="copy-btn" onclick="copyGeneratedLink(this)">Copy Link</button>
       </div>
     </div>
 
@@ -727,6 +727,8 @@ function initPanel() {
     document.getElementById('panelLiveDot').classList.add('on');
     document.getElementById('panelStatusText').textContent = 'Panel online — waiting for drivers';
     log('Panel online: ' + id, 'connect');
+    // Connect to OBS output now that peer is ready
+    tryConnectOBS(null);
   });
 
   peer.on('call', (call) => {
@@ -1268,10 +1270,9 @@ function generateLink() {
   log('Link generated for ' + rosterDrivers.length + ' drivers', 'connect');
 }
 
-function copyGeneratedLink() {
+function copyGeneratedLink(btn) {
   const link = document.getElementById('generatedLinkText').textContent;
   navigator.clipboard.writeText(link).then(() => {
-    const btn = event.target;
     btn.textContent = 'Copied!';
     setTimeout(() => btn.textContent = 'Copy Link', 1500);
   });
@@ -1282,18 +1283,7 @@ renderRoster();
 
 
 
-// Connect to OBS on load
-setTimeout(() => {
-  const OBS_PEER_ID = 'simradio_obs_output_v1';
-  const conn = peer.connect(OBS_PEER_ID, { reliable: true });
-  if (conn) {
-    conn.on('open', () => {
-      obsConnection = conn;
-      log('OBS output linked', 'connect');
-      conn.on('close', () => { obsConnection = null; log('OBS disconnected', 'disconnect'); });
-    });
-  }
-}, 2000);
+
 </script>
 </body>
 </html>
