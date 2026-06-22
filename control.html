@@ -243,7 +243,7 @@ canvas.waveform { width: 100%; height: 100%; display: block; }
   </div>
 </div>
 
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V37</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V38</div>
 
 <script>
 const PANEL_ID = 'simradio_control_panel_v1';
@@ -1114,7 +1114,12 @@ function removeDriverCard(peerId) {
   if (monitorContexts[peerId]) { try { monitorContexts[peerId].close(); } catch(e) {} delete monitorContexts[peerId]; }
   if (d.cardEl) d.cardEl.remove();
   if (d.connected) { connectedCount = Math.max(0, connectedCount - 1); updateConnCount(); }
+  // Actually close the connection so the driver's page knows to disconnect
+  if (d.conn) { try { d.conn.close(); } catch(e) {} }
+  // Release the name so it's no longer marked as taken
+  if (d.name) takenNames.delete(d.name);
   delete drivers[peerId];
+  broadcastRoster();
   log('Removed card: ' + (d.name || peerId), 'disconnect');
 }
 
