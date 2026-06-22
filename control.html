@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Radio Control Panel</title>
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script>
+  // Fallback CDN if unpkg fails to load (network blocks, CDN downtime, etc.)
+  if (typeof Peer === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"><\/script>');
+  }
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@300;400;600;700;900&family=Barlow:wght@300;400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -182,7 +188,7 @@ canvas.waveform { width: 100%; height: 100%; display: block; }
           <option value="bottom-left">Bottom Left (F1 Style)</option>
           <option value="bottom-right">Bottom Right</option>
           <option value="middle-left">Middle Left</option>
-          <option value="middle-right">Middle Right</option>
+          <option value="middle-right" selected>Middle Right</option>
           <option value="top-left">Top Left</option>
           <option value="top-right">Top Right</option>
         </select>
@@ -197,6 +203,8 @@ canvas.waveform { width: 100%; height: 100%; display: block; }
         <button onclick="addDriver()" style="padding:9px 14px;background:var(--accent);border:none;color:white;font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:13px;cursor:pointer;">ADD</button>
       </div>
       <button class="copy-btn" onclick="clearRoster()" style="margin-bottom:6px;color:var(--accent);border:1px solid var(--accent);background:transparent;">Clear All Drivers</button>
+      <input type="file" id="csvImportInput" accept=".csv,text/csv" style="display:none;" onchange="importDriversCSV(event)">
+      <button class="copy-btn" onclick="document.getElementById('csvImportInput').click()" style="margin-bottom:6px;">Import CSV</button>
       <button class="copy-btn red" onclick="copyDriverLink(this)">Copy Driver Link</button>
       <div class="obs-link-box" style="font-size:9px;">http://racingsimradio.live/driver.html</div>
     </div>
@@ -235,7 +243,7 @@ canvas.waveform { width: 100%; height: 100%; display: block; }
   </div>
 </div>
 
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V34</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V36</div>
 
 <script>
 const PANEL_ID = 'simradio_control_panel_v1';
@@ -274,10 +282,17 @@ function broadcastRoster() {
 
 // ---- PEER INIT ----
 window.addEventListener('DOMContentLoaded', () => {
-  setTimeout(() => {
-    try { initPanel(); } catch(e) { console.error('Panel init error:', e); }
-  }, 800);
+  setTimeout(initPanelSafe, 800);
 });
+
+function initPanelSafe() {
+  if (typeof Peer === 'undefined') {
+    log('Waiting for network library to load...', 'info');
+    setTimeout(initPanelSafe, 1000);
+    return;
+  }
+  try { initPanel(); } catch(e) { console.error('Panel init error:', e); log('Init error — retrying...', 'disconnect'); setTimeout(initPanelSafe, 3000); }
+}
 
 function initPanel() {
   log('Initializing...', 'info');
@@ -996,6 +1011,39 @@ function updatePreview() {
 }
 
 // ---- ROSTER ----
+function importDriversCSV(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const text = e.target.result;
+    // Split on newlines and commas, flatten, trim, dedupe, drop empties/header-like words
+    const raw = text.split(/\r?\n/).flatMap(line => line.split(','));
+    const names = [];
+    const seen = new Set(rosterDrivers.map(n => n.toLowerCase()));
+    raw.forEach(cell => {
+      const name = cell.trim().replace(/^"|"$/g, '');
+      if (!name) return;
+      if (/^(name|driver|drivername|driver name)$/i.test(name)) return; // skip header row
+      const key = name.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      names.push(name);
+    });
+
+    if (!names.length) { log('CSV import: no valid names found', 'disconnect'); event.target.value = ''; return; }
+
+    rosterDrivers.push(...names);
+    renderRoster();
+    broadcastRoster();
+    log('Imported ' + names.length + ' driver(s) from CSV', 'connect');
+    event.target.value = '';
+  };
+  reader.onerror = () => { log('CSV import failed to read file', 'disconnect'); event.target.value = ''; };
+  reader.readAsText(file);
+}
+
 function clearRoster() {
   if (!rosterDrivers.length) return;
   if (!confirm('Clear all drivers from the roster?')) return;
