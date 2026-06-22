@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <title>OBS Radio Output</title>
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script>
+  if (typeof Peer === 'undefined') {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"><\/script>');
+  }
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;900&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -147,8 +152,17 @@ const textDriverName = document.getElementById('textDriverName');
 const textMessage = document.getElementById('textMessage');
 
 window.addEventListener('load', () => {
-  setTimeout(() => { try { initOBS(); } catch(e) { console.error(e); } }, 500);
+  setTimeout(initOBSSafe, 500);
 });
+
+function initOBSSafe() {
+  if (typeof Peer === 'undefined') {
+    console.warn('Waiting for network library to load...');
+    setTimeout(initOBSSafe, 1000);
+    return;
+  }
+  try { initOBS(); } catch(e) { console.error(e); setTimeout(initOBSSafe, 3000); }
+}
 
 function initOBS() {
   peer = new Peer(OBS_PEER_ID, PEER_CONFIG);
@@ -178,7 +192,7 @@ function initOBS() {
 }
 
 function connectToPanel() {
-  const conn = peer.connect(PANEL_ID, { reliable: true });
+  const conn = peer.connect(PANEL_ID, { reliable: true, metadata: { type: 'obs' } });
   conn.on('open', () => {
     console.log('Panel connected');
     conn.on('data', (raw) => {
