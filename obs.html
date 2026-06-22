@@ -94,6 +94,7 @@ html, body { width: 1280px; height: 720px; background: transparent !important; o
   border-top: 1px solid rgba(255,255,255,0.06);
   border-bottom: 1px solid rgba(255,255,255,0.06);
 }
+.text-car-type-label { font-family: 'Barlow Condensed', sans-serif; font-weight: 600; font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(255,255,255,0.45); line-height: 1; margin-bottom: 4px; }
 .text-driver-name { font-family: 'Barlow Condensed', sans-serif; font-weight: 600; font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(255,255,255,0.45); line-height: 1; margin-bottom: 5px; }
 .text-message { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 22px; color: #ffffff; line-height: 1.2; letter-spacing: 0.02em; min-height: 1.3em; word-break: break-word; }
 .text-cursor { display: inline-block; width: 2px; height: 0.85em; background: white; margin-left: 2px; vertical-align: middle; animation: cursorBlink 0.6s infinite; }
@@ -122,6 +123,7 @@ html, body { width: 1280px; height: 720px; background: transparent !important; o
 <div class="text-overlay pos-bottom-left" id="textOverlay">
   <div class="text-accent-bar" id="textAccentBar"></div>
   <div class="text-overlay-body">
+    <div class="text-car-type-label" id="textCarTypeLabel">DRIVER RADIO</div>
     <div class="text-driver-name" id="textDriverName">DRIVER</div>
     <div class="text-message" id="textMessage"><span class="text-cursor"></span></div>
   </div>
@@ -148,6 +150,7 @@ const carTypeLabel = document.getElementById('carTypeLabel');
 const driverNameLabel = document.getElementById('driverNameLabel');
 const textOverlay = document.getElementById('textOverlay');
 const textAccentBar = document.getElementById('textAccentBar');
+const textCarTypeLabel = document.getElementById('textCarTypeLabel');
 const textDriverName = document.getElementById('textDriverName');
 const textMessage = document.getElementById('textMessage');
 
@@ -288,6 +291,8 @@ function handleTextFire(payload) {
 
   // Set styles
   textAccentBar.style.background = accentColor || '#e8181b';
+  textCarTypeLabel.textContent = carType || 'DRIVER RADIO';
+  textCarTypeLabel.style.color = (textColor || '#ffffff') + '70';
   textDriverName.textContent = driverName || 'DRIVER';
   textDriverName.style.color = (textColor || '#ffffff') + '70';
   textMessage.style.color = textColor || '#ffffff';
