@@ -123,7 +123,6 @@ html, body { width: 1280px; height: 720px; background: transparent !important; o
 <div class="text-overlay pos-bottom-left" id="textOverlay">
   <div class="text-accent-bar" id="textAccentBar"></div>
   <div class="text-overlay-body">
-    <div class="text-car-type-label" id="textCarTypeLabel">DRIVER RADIO</div>
     <div class="text-driver-name" id="textDriverName">DRIVER</div>
     <div class="text-message" id="textMessage"><span class="text-cursor"></span></div>
   </div>
@@ -291,8 +290,6 @@ function handleTextFire(payload) {
 
   // Set styles
   textAccentBar.style.background = accentColor || '#e8181b';
-  textCarTypeLabel.textContent = carType || 'DRIVER RADIO';
-  textCarTypeLabel.style.color = (textColor || '#ffffff') + '70';
   textDriverName.textContent = driverName || 'DRIVER';
   textDriverName.style.color = (textColor || '#ffffff') + '70';
   textMessage.style.color = textColor || '#ffffff';
@@ -303,6 +300,10 @@ function handleTextFire(payload) {
   textOverlay.className = 'text-overlay pos-' + pos;
   void textOverlay.offsetWidth;
   textOverlay.classList.add(isRight ? 'show-right' : 'show-left');
+
+  // Play F1 chirp as overlay appears
+  const chirpAudio = new Audio(F1_CHIRP);
+  chirpAudio.play().catch(e => console.warn('Chirp play failed:', e));
 
   // Start typing animation
   const chars = message.split('');
