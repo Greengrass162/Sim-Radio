@@ -235,11 +235,10 @@ canvas.waveform { width: 100%; height: 100%; display: block; }
   </div>
 </div>
 
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V33</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V34</div>
 
 <script>
 const PANEL_ID = 'simradio_control_panel_v1';
-const OBS_PEER_ID = 'simradio_obs_output_v1';
 const BUFFER_SECONDS = 60;
 const PEER_CONFIG = {
   debug: 0,
@@ -289,15 +288,17 @@ function initPanel() {
     document.getElementById('panelLiveDot').classList.add('on');
     document.getElementById('panelStatusText').textContent = 'Panel online — waiting for drivers';
     log('Panel online', 'connect');
-    tryConnectOBS();
+    // Don't initiate OBS connection — OBS connects to us
   });
 
   peer.on('connection', (conn) => {
     const meta = conn.metadata || {};
 
-    // OBS connection
-    if (!meta.driverName && meta.type !== 'roster_request' && meta.type !== 'audio') {
+    // OBS connection — identified by type:'obs' metadata
+    if (meta.type === 'obs' || (!meta.driverName && meta.type !== 'roster_request' && meta.type !== 'audio')) {
       conn.on('open', () => {
+        // Close old OBS connection if there was one
+        if (obsConnection && obsConnection.open) { try { obsConnection.close(); } catch(e) {} }
         obsConnection = conn;
         log('OBS connected', 'connect');
         conn.on('close', () => { obsConnection = null; log('OBS disconnected', 'disconnect'); });
@@ -389,36 +390,7 @@ function initPanel() {
   });
 }
 
-let obsRetryTimer = null;
-let obsConnecting = false;
-
-function tryConnectOBS() {
-  if (obsConnecting || (obsConnection && obsConnection.open)) return;
-  obsConnecting = true;
-  clearTimeout(obsRetryTimer);
-
-  const conn = peer.connect(OBS_PEER_ID, { reliable: true });
-  conn.on('open', () => {
-    obsConnecting = false;
-    obsConnection = conn;
-    log('OBS linked', 'connect');
-    conn.on('close', () => {
-      obsConnection = null;
-      obsRetryTimer = setTimeout(tryConnectOBS, 5000);
-    });
-  });
-  conn.on('error', () => {
-    obsConnecting = false;
-    obsRetryTimer = setTimeout(tryConnectOBS, 8000);
-  });
-  // Timeout if no response
-  setTimeout(() => {
-    if (obsConnecting) {
-      obsConnecting = false;
-      obsRetryTimer = setTimeout(tryConnectOBS, 8000);
-    }
-  }, 8000);
-}
+// OBS connects to panel inbound — no outbound connection needed
 
 // ---- AUDIO CHUNK HANDLING ----
 function handleChunk(peerId, msg) {
@@ -435,6 +407,7 @@ function handleChunk(peerId, msg) {
   if (msg.isFirst) {
     d.allChunks = [blob];
     d.chunks = [blob];
+    d.waveformData = [];
   } else {
     d.allChunks.push(blob);
     if (d.allChunks.length > BUFFER_SECONDS + 1) {
@@ -452,32 +425,38 @@ function handleChunk(peerId, msg) {
   if (previewBtn) previewBtn.disabled = false;
 
   const dbg = d.cardEl && d.cardEl.querySelector('[data-dbg]');
-  if (dbg) dbg.textContent = `chunks:${d.chunks.length} size:${msg.size}b — decoding...`;
 
-  // Decode for waveform — scale points to buffer fill so bars are always same density
-  new Blob(d.allChunks, { type: d.mimeType }).arrayBuffer().then(buf => {
-    const ctx = new AudioContext();
-    ctx.decodeAudioData(buf.slice(0), (decoded) => {
-      ctx.close();
+  // Decode ONLY the new chunk (with header for codec context) — never the whole buffer.
+  // This keeps decode cost constant (~1 chunk) instead of growing with buffer size.
+  if (!d.decodeCtx) d.decodeCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  const decodeBlob = msg.isFirst ? blob : new Blob([d.allChunks[0], blob], { type: d.mimeType });
+  decodeBlob.arrayBuffer().then(buf => {
+    d.decodeCtx.decodeAudioData(buf.slice(0), (decoded) => {
       const ch = decoded.getChannelData(0);
-      // Scale points: 200 points = 60s, so pts proportional to actual duration
-      const pts = Math.max(10, Math.round((d.chunks.length / BUFFER_SECONDS) * 200));
-      const step = Math.max(1, Math.floor(ch.length / pts));
-      const newData = [];
-      for (let i = 0; i < pts; i++) {
+      // Reduce this single chunk down to a few points worth of RMS
+      const ptsPerChunk = Math.max(1, Math.round(200 / BUFFER_SECONDS));
+      const step = Math.max(1, Math.floor(ch.length / ptsPerChunk));
+      const newPts = [];
+      for (let i = 0; i < ptsPerChunk; i++) {
         const s = i * step, end = Math.min(s + step, ch.length);
+        if (end <= s) continue;
         let sum = 0;
         for (let j = s; j < end; j++) sum += ch[j] * ch[j];
-        newData.push(Math.sqrt(sum / (end - s)));
+        newPts.push(Math.sqrt(sum / (end - s)));
       }
-      d.waveformData = newData;
-      const peak = Math.max(...newData);
-      if (dbg) dbg.textContent = `chunks:${d.chunks.length} dur:${decoded.duration.toFixed(1)}s peak:${peak.toFixed(4)}`;
+      if (msg.isFirst) {
+        d.waveformData = newPts;
+      } else {
+        d.waveformData.push(...newPts);
+        const maxPts = 200;
+        if (d.waveformData.length > maxPts) d.waveformData = d.waveformData.slice(-maxPts);
+      }
+      if (dbg) dbg.textContent = `chunks:${d.chunks.length} size:${msg.size}b ok`;
     }, (err) => {
-      ctx.close();
-      if (dbg) dbg.textContent = `chunks:${d.chunks.length} — decode err (normal for first chunk)`;
+      if (dbg) dbg.textContent = `chunks:${d.chunks.length} — decode skipped`;
     });
-  });
+  }).catch(() => {});
 }
 
 // ---- CARD ----
@@ -662,6 +641,8 @@ async function fireTextClip(idx, driverName) {
   const text = input.value.trim();
   if (!text) { input.focus(); return; }
 
+  const quotedText = '"' + text + '"';
+
   const card = document.getElementById('text-card-' + idx);
   const btn = card.querySelector('.text-fire-btn');
   btn.textContent = '⬤ SENDING...';
@@ -676,12 +657,14 @@ async function fireTextClip(idx, driverName) {
     accentColor: settings.accentColor,
     textColor: settings.textColor,
     position: settings.position,
-    message: text,
+    message: quotedText,
   });
 
   if (obsConnection && obsConnection.open) {
     obsConnection.send(payload);
-    log('TEXT FIRED: ' + driverName + ' — "' + text.substring(0, 30) + (text.length > 30 ? '...' : '') + '"', 'fire');
+    log('TEXT FIRED: ' + driverName + ' — ' + quotedText.substring(0, 32) + (quotedText.length > 32 ? '...' : ''), 'fire');
+    input.value = '';
+    autoResizeTextarea(input);
   } else {
     log('OBS not connected', 'disconnect');
     tryConnectOBS();
@@ -986,8 +969,7 @@ async function fireClip(peerId) {
     obsConnection.send(payload);
     log('FIRED: ' + d.name + ' (' + selected.length + 's)', 'fire');
   } else {
-    log('OBS not connected — retrying connection...', 'disconnect');
-    tryConnectOBS();
+    log('OBS not connected — open obs.html in OBS browser source first', 'disconnect');
   }
 }
 
@@ -1062,6 +1044,8 @@ function removeDriverCard(peerId) {
   const d = drivers[peerId];
   if (!d) return;
   if (d.animFrame) cancelAnimationFrame(d.animFrame);
+  if (d.decodeCtx) { try { d.decodeCtx.close(); } catch(e) {} }
+  if (monitorContexts[peerId]) { try { monitorContexts[peerId].close(); } catch(e) {} delete monitorContexts[peerId]; }
   if (d.cardEl) d.cardEl.remove();
   if (d.connected) { connectedCount = Math.max(0, connectedCount - 1); updateConnCount(); }
   delete drivers[peerId];
