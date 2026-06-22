@@ -243,7 +243,7 @@ canvas.waveform { width: 100%; height: 100%; display: block; }
   </div>
 </div>
 
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V36</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V37</div>
 
 <script>
 const PANEL_ID = 'simradio_control_panel_v1';
@@ -261,8 +261,20 @@ let peer;
 let drivers = {};
 let obsConnection = null;
 let connectedCount = 0;
-let rosterDrivers = [];
-let takenNames = new Set(); // names currently in use
+let rosterDrivers = loadRosterFromStorage();
+let takenNames = new Set(); // names currently in use — always starts empty on page load, no stale "in use" state
+
+function loadRosterFromStorage() {
+  try {
+    const saved = localStorage.getItem('simradio_roster');
+    if (saved) return JSON.parse(saved);
+  } catch(e) {}
+  return [];
+}
+
+function saveRosterToStorage() {
+  try { localStorage.setItem('simradio_roster', JSON.stringify(rosterDrivers)); } catch(e) {}
+}
 let rosterConns = []; // driver pages connected for roster sync
 
 // Push roster to all listening driver pages
@@ -1035,6 +1047,7 @@ function importDriversCSV(event) {
     if (!names.length) { log('CSV import: no valid names found', 'disconnect'); event.target.value = ''; return; }
 
     rosterDrivers.push(...names);
+    saveRosterToStorage();
     renderRoster();
     broadcastRoster();
     log('Imported ' + names.length + ' driver(s) from CSV', 'connect');
@@ -1049,6 +1062,7 @@ function clearRoster() {
   if (!confirm('Clear all drivers from the roster?')) return;
   rosterDrivers = [];
   takenNames = new Set();
+  saveRosterToStorage();
   renderRoster();
   broadcastRoster();
   log('Roster cleared', 'disconnect');
@@ -1059,6 +1073,7 @@ function addDriver() {
   const name = input.value.trim();
   if (!name || rosterDrivers.includes(name)) { input.value = ''; return; }
   rosterDrivers.push(name);
+  saveRosterToStorage();
   input.value = '';
   renderRoster();
   broadcastRoster();
@@ -1066,7 +1081,10 @@ function addDriver() {
 }
 
 function removeDriver(i) {
+  const name = rosterDrivers[i];
   rosterDrivers.splice(i, 1);
+  takenNames.delete(name);
+  saveRosterToStorage();
   renderRoster();
   broadcastRoster();
 }
