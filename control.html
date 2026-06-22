@@ -243,7 +243,7 @@ canvas.waveform { width: 100%; height: 100%; display: block; }
   </div>
 </div>
 
-<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V38</div>
+<div style="position:fixed;bottom:6px;right:10px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#2a2a35;pointer-events:none;z-index:9999;">V39</div>
 
 <script>
 const PANEL_ID = 'simradio_control_panel_v1';
@@ -921,22 +921,86 @@ async function previewClip(peerId) {
     const ei = Math.max(si + 1, Math.ceil(d.cropEnd * total));
     const selected = d.frozenChunks.slice(si, ei);
     if (!selected.length) { reset(); return; }
-    const playBlob = new Blob([d.frozenHeader, ...selected], { type: d.mimeType });
+
+    // If header chunk is itself part of the selection (cropping from the very start),
+    // don't prepend it a second time — just use selected as-is with its own header.
+    const headerIsIncluded = (si === 0);
+    const playBlob = headerIsIncluded
+      ? new Blob(selected, { type: d.mimeType })
+      : new Blob([d.frozenHeader, ...selected], { type: d.mimeType });
+
     try {
       const buf = await playBlob.arrayBuffer();
       const ctx = new AudioContext();
       await ctx.resume();
       ctx.decodeAudioData(buf.slice(0), (decoded) => {
+        // Header chunk carries ~1s of real audio from connect time — trim it off
+        // unless the crop selection actually starts at the very beginning of the buffer.
+        const trimSec = headerIsIncluded ? 0 : 1.0;
+        const sr = decoded.sampleRate;
+        const startSample = Math.min(Math.floor(trimSec * sr), decoded.length - 1);
+        const trimmedLength = decoded.length - startSample;
+        let playBuffer = decoded;
+        if (trimSec > 0 && trimmedLength > 0) {
+          playBuffer = ctx.createBuffer(decoded.numberOfChannels, trimmedLength, sr);
+          for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+            playBuffer.copyToChannel(decoded.getChannelData(ch).subarray(startSample), ch);
+          }
+        }
         const src = ctx.createBufferSource();
-        src.buffer = decoded;
+        src.buffer = playBuffer;
         src.connect(ctx.destination);
         src.start(0);
-        log('Preview: ' + d.name + ' (' + decoded.duration.toFixed(1) + 's)', 'info');
+        log('Preview: ' + d.name + ' (' + playBuffer.duration.toFixed(1) + 's)', 'info');
         src.onended = () => { ctx.close(); reset(); };
-        setTimeout(() => { try { ctx.close(); } catch(e) {} reset(); }, (decoded.duration * 1000) + 500);
+        setTimeout(() => { try { ctx.close(); } catch(e) {} reset(); }, (playBuffer.duration * 1000) + 500);
       }, (err) => { ctx.close(); log('Preview decode err: ' + err, 'fire'); reset(); });
     } catch(e) { log('Preview error: ' + e.message, 'fire'); reset(); }
   }
+}
+
+// ---- WAV ENCODER (for clean trimmed audio sent to OBS) ----
+function audioBufferToWav(buffer) {
+  const numCh = buffer.numberOfChannels;
+  const sr = buffer.sampleRate;
+  const numFrames = buffer.length;
+  const bytesPerSample = 2;
+  const blockAlign = numCh * bytesPerSample;
+  const dataSize = numFrames * blockAlign;
+  const bufferSize = 44 + dataSize;
+  const ab = new ArrayBuffer(bufferSize);
+  const view = new DataView(ab);
+
+  function writeStr(offset, str) { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); }
+
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, numCh, true);
+  view.setUint32(24, sr, true);
+  view.setUint32(28, sr * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  const channels = [];
+  for (let ch = 0; ch < numCh; ch++) channels.push(buffer.getChannelData(ch));
+
+  let offset = 44;
+  for (let i = 0; i < numFrames; i++) {
+    for (let ch = 0; ch < numCh; ch++) {
+      let sample = Math.max(-1, Math.min(1, channels[ch][i]));
+      sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      view.setInt16(offset, sample, true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([ab], { type: 'audio/wav' });
 }
 
 // ---- FIRE ----
@@ -957,27 +1021,53 @@ async function fireClip(peerId) {
   const si = Math.floor(d.cropStart * total);
   const ei = Math.max(si + 1, Math.ceil(d.cropEnd * total));
   const selected = chunkSource.slice(si, ei);
-  const fireBlob = new Blob([header, ...selected], { type: d.mimeType });
 
-  const base64 = await new Promise(resolve => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result.split(',')[1]);
-    reader.readAsDataURL(fireBlob);
-  });
+  const headerIsIncluded = (si === 0);
+  const fireBlob = headerIsIncluded
+    ? new Blob(selected, { type: d.mimeType })
+    : new Blob([header, ...selected], { type: d.mimeType });
 
-  // Decode locally to get real duration in seconds
-  let realDuration = selected.length; // fallback
+  // Decode, trim off the header chunk's ~1s of real audio (unless selection starts
+  // at the very beginning of the buffer), then re-encode to WAV for a clean send to OBS.
+  let base64, realDuration = selected.length, mimeTypeOut = d.mimeType;
   try {
     const buf = await fireBlob.arrayBuffer();
     const actx = new AudioContext();
-    await new Promise(resolve => {
-      actx.decodeAudioData(buf.slice(0), (decoded) => {
-        realDuration = decoded.duration;
-        actx.close();
-        resolve();
-      }, () => { actx.close(); resolve(); });
+    const decoded = await new Promise((resolve, reject) => {
+      actx.decodeAudioData(buf.slice(0), resolve, reject);
     });
-  } catch(e) {}
+
+    const trimSec = headerIsIncluded ? 0 : 1.0;
+    const sr = decoded.sampleRate;
+    const startSample = Math.min(Math.floor(trimSec * sr), decoded.length - 1);
+    const trimmedLength = decoded.length - startSample;
+    let playBuffer = decoded;
+    if (trimSec > 0 && trimmedLength > 0) {
+      playBuffer = actx.createBuffer(decoded.numberOfChannels, trimmedLength, sr);
+      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+        playBuffer.copyToChannel(decoded.getChannelData(ch).subarray(startSample), ch);
+      }
+    }
+    realDuration = playBuffer.duration;
+
+    // Encode trimmed buffer to WAV
+    const wavBlob = audioBufferToWav(playBuffer);
+    mimeTypeOut = 'audio/wav';
+    base64 = await new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result.split(',')[1]);
+      reader.readAsDataURL(wavBlob);
+    });
+    actx.close();
+  } catch(e) {
+    console.error('Fire encode error:', e);
+    // Fallback — send the raw blob if decode/encode failed
+    base64 = await new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result.split(',')[1]);
+      reader.readAsDataURL(fireBlob);
+    });
+  }
 
   const settings = getSettings();
   const payload = JSON.stringify({
@@ -988,7 +1078,7 @@ async function fireClip(peerId) {
     textColor: settings.textColor,
     position: settings.position,
     audio: base64,
-    mimeType: d.mimeType,
+    mimeType: mimeTypeOut,
     duration: realDuration,
   });
 
